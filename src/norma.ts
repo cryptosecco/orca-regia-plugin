@@ -176,6 +176,8 @@ export function normaSchede(worktrees: Grezzo[], casa = ''): Scheda[] {
       progetto: String(w.repo ?? ''),
       nome: String(w.displayName ?? ''),
       percorso: corto(w.path, 300, casa),
+      // Il server Orca abbinato su cui sta la scheda; null: questa macchina.
+      server: typeof w.server === 'string' && w.server ? w.server : null,
       tipo: w.workspaceKind === 'git' ? 'worktree' : 'cartella',
       ramo: String(w.branch ?? '').replace('refs/heads/', ''),
       stato: String(w.status ?? ''),
@@ -226,6 +228,8 @@ export type CliGrezza = {
   posta: Grezzo[]
   /** `orchestration worker-list`: i worker di orchestrazione con lo stato della loro consegna. */
   operai?: Grezzo[]
+  /** I server Orca abbinati letti in questo giro, oltre a questa macchina, e se hanno risposto. */
+  server?: { nome: string; ok: boolean; host?: string }[]
 }
 
 /** Una consegna di orchestrazione, per terminale: com'è andata. */
@@ -237,6 +241,8 @@ export type ParteCli = {
   automazioni: Quadro['automazioni']
   messaggi: Messaggio[]
   operai?: Operaio[]
+  /** I server Orca abbinati letti oltre a questa macchina, e se hanno risposto all'ultimo giro. */
+  server?: { nome: string; ok: boolean; host?: string }[]
 }
 
 export function normaCli(grezza: CliGrezza, casa = ''): ParteCli {
@@ -342,7 +348,7 @@ export function normaCli(grezza: CliGrezza, casa = ''): ParteCli {
     quando: ms(m.created_at)
   }))
 
-  return { bot, schede, automazioni, messaggi, operai: normaOperai(grezza.operai) }
+  return { bot, schede, automazioni, messaggi, operai: normaOperai(grezza.operai), server: (grezza.server ?? []).map((s) => ({ nome: corto(s.nome, 64), ok: Boolean(s.ok), ...(s.host ? { host: String(s.host) } : {}) })) }
 }
 
 /**
@@ -915,7 +921,7 @@ export function componi(x: Ingressi): Quadro {
     quando: x.adesso,
     fermo: Boolean(x.fermo),
     fonti: {
-      cli: { ok: Boolean(cli) && !x.cli.errore, quando: x.cli.quando, errore: x.cli.errore },
+      cli: { ok: Boolean(cli) && !x.cli.errore, quando: x.cli.quando, errore: x.cli.errore, server: (cli?.server ?? []).map((s) => ({ nome: s.nome, ok: s.ok })) },
       motore: { ok: motoreVivo, aggiornato: motore?.aggiornato ?? null, errore: x.motore.errore, spento: Boolean(x.motoreSpento) },
       ufficioDa,
       incrociDisponibili: ufficioDa === 'motore' && motoreVivo

@@ -3,7 +3,7 @@
 // optional state file, the settings, and what the worker reads and launches.
 import { afterEach, assert, mockHost, mountWorker, test } from 'orca/testing'
 import { BOTS, HOME, demoCli, demoHomes } from '../demo/demo.mjs'
-import { COMANDI, leggiMascotta, type Dipendenze } from './fonti'
+import { COMANDI, eseguibiliOrca, leggiMascotta, ORCA_APP, type Dipendenze } from './fonti'
 import { componi, componiCoda, leggiTitolo, normaCli, orchestratoreTra, ordinaProgetti, testoAvviso, voceBarra } from './norma'
 import { impostazioniDa, NEUTRE, NOME, type Opzioni } from './opzioni'
 import { avvia, deactivate } from './worker'
@@ -135,10 +135,13 @@ test('the status bar and the notifications carry the plugin\'s name and no one e
 
 test('settings: the defaults assume nothing, and odd values fall back to them', () => {
   const d = impostazioniDa({})
-  assert.deepEqual(d, { codaBot: '', leggiTitoli: true, corsie: [], alias: {}, secondi: 20, avvisi: true, botAttesi: [], fileStato: '', orca: '', animazioni: true })
+  assert.deepEqual(d, { codaBot: '', leggiTitoli: true, corsie: [], alias: {}, secondi: 20, avvisi: true, botAttesi: [], fileStato: '', orca: '', server: null, animazioni: true })
   assert.deepEqual(impostazioniDa(null), d)
   const s = impostazioniDa({ queueBot: '  Atlas ', titleFormat: false, laneOrder: 'Web, API ,Web,, ', animations: 'off', refreshSeconds: 5, notifications: false, expectedBots: 'Quill', stateFile: ' ~/state.json ', orcaCli: '/opt/orca' })
-  assert.deepEqual(s, { codaBot: 'Atlas', leggiTitoli: false, corsie: ['Web', 'API'], alias: {}, secondi: 10, avvisi: false, botAttesi: ['Quill'], fileStato: '~/state.json', orca: '/opt/orca', animazioni: false })
+  assert.deepEqual(s, { codaBot: 'Atlas', leggiTitoli: false, corsie: ['Web', 'API'], alias: {}, secondi: 10, avvisi: false, botAttesi: ['Quill'], fileStato: '~/state.json', orca: '/opt/orca', server: null, animazioni: false })
+  // Paired servers: empty is every server Orca reports, names are only those, `local` is this machine only.
+  assert.deepEqual(impostazioniDa({ servers: ' hub , lab,hub ' }).server, ['hub', 'lab'])
+  assert.deepEqual([impostazioniDa({ servers: 'local' }).server, impostazioniDa({ servers: ' None ' }).server, impostazioniDa({ servers: 7 }).server], [[], [], null])
   assert.equal(impostazioniDa({ refreshSeconds: 9999 }).secondi, 300)
   assert.equal(impostazioniDa({ refreshSeconds: 'soon', queueBot: 7, laneOrder: null }).secondi, 20)
   assert.equal(impostazioniDa({ queueBot: 7 }).codaBot, '')
@@ -278,6 +281,134 @@ test('a bot\'s mascot is read from the Orca app on this machine, and only a plai
     assert.equal(await leggiMascotta(con({ 'N1-AbCdEf12.svg': svg(cattivo) }), 'N1', null, [cartella]), null, cattivo)
   }
   assert.equal(await leggiMascotta(con({}), 'N1', null, ['/no/such/folder']), null)
+})
+
+// ---------- client and server: this machine shows, a paired Orca server holds the bots ----------
+
+test('the Orca CLI is looked for where each system puts it, and on Linux plain `orca` is never run', () => {
+  const linux = eseguibiliOrca('', '/home/demo', { sistema: 'linux', risorse: '/opt/orca-app/resources', eseguibile: '/opt/orca-app/orca-ide' })
+  assert.deepEqual(linux, ['/opt/orca-app/resources/bin/orca-ide', '/home/demo/.local/bin/orca-ide', 'orca-ide'])
+  // `orca` on a Linux PATH is the GNOME screen reader.
+  assert.equal(linux.some((e) => e === 'orca' || e.endsWith('/orca')), false)
+  // The setting comes first, with the home folder spelled out.
+  assert.equal(eseguibiliOrca(' ~/bin/my-orca ', '/home/demo', { sistema: 'linux' })[0], '/home/demo/bin/my-orca')
+  const mac = eseguibiliOrca('', '/Users/demo', { sistema: 'darwin' })
+  assert.deepEqual(mac, [ORCA_APP, 'orca', 'orca-ide'])
+})
+
+/** A stand-in CLI for a laptop paired with the server `hub`: the bots live there, one workspace lives here. */
+function conServer(opzioni: { muto?: boolean } = {}): Finte & { eseguibili: string[] } {
+  const f = finte()
+  const cli = demoCli(NOW) as Record<string, any>
+  const eseguibili: string[] = []
+  const rifiuto = (messaggio: string, code = 'invalid_argument') => JSON.stringify({ ok: false, error: { code, message: messaggio } })
+  f.dip.posto = { sistema: 'linux', risorse: '/opt/orca-app/resources' }
+  f.dip.lancia = async (eseguibile, argomenti) => {
+    eseguibili.push(eseguibile)
+    f.lanci.push(argomenti)
+    const i = argomenti.indexOf('--environment')
+    const server = i >= 0 ? argomenti[i + 1] : ''
+    const chiave = argomenti.filter((a, n) => a !== '--json' && (i < 0 || (n !== i && n !== i + 1))).join(' ')
+    if (server) {
+      if (server !== 'hub') return rifiuto('Unknown Orca server in --environment ' + server)
+      if (opzioni.muto) throw new Error('Command failed: timed out')
+      if (chiave === 'bot list') return JSON.stringify({ ok: true, result: cli[chiave] })
+      if (chiave === 'orchestration worker-list') return JSON.stringify({ ok: true, result: { workers: [] } })
+      return chiave in cli ? JSON.stringify({ ok: true, result: cli[chiave] }) : rifiuto('unknown command')
+    }
+    // This machine's Orca: it lists the server's bots, and says which server it left out of `worktree ps`.
+    if (chiave === 'bot list') return JSON.stringify({ ok: true, result: { bots: cli[chiave].bots.map((b: any) => ({ ...b, server: { name: 'hub', on: 'hub' } })), unreachable: [] } })
+    if (chiave === 'worktree ps --limit 300')
+      return JSON.stringify({ ok: true, result: { worktrees: [{ workspaceKind: 'git', repo: 'Scratch', displayName: 'main', path: HOME + '/scratch', branch: 'refs/heads/main', status: 'inactive', agents: [] }], hostScope: { hostIds: ['local'], omittedHostSelectors: [{ hostId: 'runtime:hub-id', selector: '--environment hub' }] } } })
+    if (chiave === 'automations list') return JSON.stringify({ ok: true, result: { automations: [] } })
+    if (chiave === 'orchestration inbox --limit 40 --full') return JSON.stringify({ ok: true, result: { messages: [] } })
+    if (chiave === 'orchestration worker-list') return JSON.stringify({ ok: true, result: { workers: [] } })
+    return rifiuto('No bot named ' + argomenti[argomenti.indexOf('--bot') + 1])
+  }
+  return { ...f, eseguibili }
+}
+const alServer = (f: Finte): string[][] => f.lanci.filter((a) => a.includes('--environment'))
+
+test('worker, with a paired server: its bots, workspaces, messages and automations are read from it and joined with this machine', async () => {
+  const f = conServer()
+  const { worker } = await monta(f)
+  const q = await worker.request('regia.aggiorna')
+  assert.equal(q.fonti.cli.ok, true)
+  assert.deepEqual(q.fonti.cli.server, [{ nome: 'hub', ok: true }])
+  // The bots come whole: items, chats and the agents they started, all asked of the server by bot id.
+  const solo = await (async () => {
+    const g = finte()
+    const m = await monta(g)
+    const r = await m.worker.request('regia.aggiorna')
+    await m.worker.deactivate()
+    return r
+  })()
+  attivo = worker
+  assert.deepEqual(q.bot.map((b: any) => [b.nome, b.item.length, b.worker.length, b.chat.length]), solo.bot.map((b: any) => [b.nome, b.item.length, b.worker.length, b.chat.length]))
+  assert.equal(q.coda.voci.length, solo.coda.voci.length)
+  assert.equal(q.messaggi.length, solo.messaggi.length)
+  assert.equal(q.automazioni.length, solo.automazioni.length)
+  // The workspaces of both places, each one knowing where it lives.
+  assert.equal(q.schede.length, solo.schede.length + 1)
+  assert.deepEqual(q.schede.filter((s: any) => !s.server).map((s: any) => s.progetto), ['Scratch'])
+  assert.ok(q.schede.filter((s: any) => s.server).every((s: any) => s.server === 'hub'))
+  // Every command about a bot went to its server; only `bot list` and the four place commands went to this machine.
+  const qui = f.lanci.filter((a) => !a.includes('--environment')).map((a) => a.filter((x) => x !== '--json').join(' '))
+  assert.deepEqual([...new Set(qui)].sort(), ['automations list', 'bot list', 'orchestration inbox --limit 40 --full', 'orchestration worker-list', 'worktree ps --limit 300'])
+  assert.ok(alServer(f).length > 0 && alServer(f).every((a) => a[a.indexOf('--environment') + 1] === 'hub' && a.at(-1) === '--json'))
+  // Still only the fixed list of read commands, with the server's name as the only addition.
+  const ammessi = Object.values(COMANDI).map((c) => c.filter((a) => a !== '{bot}').join(' '))
+  for (const a of f.lanci) assert.ok(ammessi.includes(a.filter((x, n) => x !== '--json' && x !== '--environment' && a[n - 1] !== '--environment' && !/^[0-9a-f-]{36}$/.test(x)).join(' ')), a.join(' '))
+  // On Linux the CLI is the Orca app's own `orca-ide`: nothing called plain `orca` was run.
+  assert.ok(f.eseguibili.every((e) => e === '/opt/orca-app/resources/bin/orca-ide'), [...new Set(f.eseguibili)].join())
+})
+
+test('worker, paired servers switched off in the settings: this machine only, and nothing is asked of a server', async () => {
+  const f = conServer()
+  const { worker } = await monta(f, { servers: 'local' })
+  const q = await worker.request('regia.aggiorna')
+  assert.deepEqual(alServer(f), [])
+  assert.deepEqual(q.fonti.cli.server, [])
+  // The bots are still listed, as this machine's Orca lists them; a server that is not the chosen one is left alone too.
+  assert.equal(q.bot.length, 6)
+  const g = conServer()
+  const altro = await monta(g, { servers: 'lab' })
+  await altro.worker.request('regia.aggiorna')
+  assert.deepEqual(alServer(g), [])
+})
+
+test('worker, a paired server that does not answer: it is said, this machine still shows, and the round does not wait on every command', async () => {
+  const f = conServer({ muto: true })
+  const { worker } = await monta(f)
+  const q = await worker.request('regia.aggiorna')
+  assert.equal(q.fonti.cli.ok, true)
+  assert.deepEqual(q.fonti.cli.server, [{ nome: 'hub', ok: false }])
+  assert.deepEqual(q.schede.map((s: any) => s.progetto), ['Scratch'])
+  // One group of commands found it silent; the rest of the round did not try.
+  assert.ok(alServer(f).length <= 6, String(alServer(f).length))
+  const V = await import('../panel/viste.js')
+  assert.ok(V.fonti(q, NOW).includes('Server hub is not answering'))
+})
+
+test('a click opens the workspace of the right place when this machine and the server have the same path', async () => {
+  const f = conServer()
+  const cli = demoCli(NOW) as Record<string, any>
+  const remota = cli['worktree ps --limit 300'].worktrees.find((w: any) => w.repo !== 'Bots' && (w.agents ?? []).some((g: any) => typeof g.address === 'string'))
+  const terminale = remota.agents.find((g: any) => typeof g.address === 'string').address
+  const host = mockHost({
+    results: {
+      'workspace.list': { workspaces: [{ id: 'qui', kind: 'worktree', name: 'x', path: remota.path, branch: null, hostId: 'local' }, { id: 'sul-server', kind: 'worktree', name: 'x', path: remota.path, branch: null, hostId: 'runtime:hub-id' }], truncated: false },
+      'terminal.focus': { focused: false }, 'workspace.open': { opened: true }, 'commands.run': { ran: true }, 'notifications.show': { delivered: true }, 'statusBar.update': { ok: true }
+    },
+    settings: {}
+  })
+  const worker = await mountWorker({ default: (orca) => avvia(orca, f.dip), deactivate }, { host, events: ['agent.status.changed', 'workspace.changed', 'workspace.created', 'workspace.removed'], commands: ['show'] })
+  attivo = worker
+  const q = await worker.request('regia.aggiorna')
+  const scheda = q.schede.find((s: any) => s.agenti.some((g: any) => g.terminale === terminale))
+  assert.equal(scheda.server, 'hub')
+  assert.deepEqual(await worker.request('regia.apri', { percorso: scheda.percorso, terminale }), { aperto: true, come: 'scheda' })
+  assert.deepEqual((host.callsOf('workspace.open').at(-1) as { workspaceId: string }), { workspaceId: 'sul-server' })
 })
 
 // ---------- the panel never trusts a text it shows ----------

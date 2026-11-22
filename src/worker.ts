@@ -14,7 +14,7 @@ import type { Bersaglio, Quadro } from './protocol'
 const VOCE = 'status'
 const COMANDO = 'show'
 /** Le impostazioni del manifest, per chiave. */
-const CHIAVI = ['queueBot', 'titleFormat', 'laneOrder', 'animations', 'refreshSeconds', 'notifications', 'expectedBots', 'stateFile', 'orcaCli'] as const
+const CHIAVI = ['queueBot', 'titleFormat', 'laneOrder', 'animations', 'refreshSeconds', 'notifications', 'expectedBots', 'stateFile', 'orcaCli', 'servers'] as const
 const PRIMO_GIRO_MS = 1500
 /**
  * Ogni quanto parte un giro sulla CLI. In ogni giro ci sono sempre la coda dell'orchestratore, gli stati
@@ -45,7 +45,8 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
   const memoria = memoriaCli()
   // Ultimi dati buoni della CLI: restano a schermo, con la loro età, se la CLI smette di rispondere.
   let cli: { parte: ParteCli | null; quando: number | null; errore: string | null } = { parte: null, quando: null, errore: null }
-  let schedeApi: { id: string; path: string }[] = []
+  let schedeApi: { id: string; path: string; host: string | null }[] = []
+  const daApi = (w: any): { id: string; path: string; host: string | null } => ({ id: String(w.id), path: String(w.path), host: typeof w.hostId === 'string' ? w.hostId : null })
   let workspaces: any[] | null = null
   // Le foto profilo dei bot: restano le ultime lette se una lettura fallisce.
   let foto: FotoBot[] = []
@@ -137,10 +138,10 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
       ultimoCli = adesso
       try {
         // La rotazione fa il giro completo nel tempo dell'impostazione: tra 10 e 300 secondi.
-        const quanti = Math.ceil((comandiARotazione(memoria.grezza?.bots.length ?? 0) * GIRO_CLI_MS) / (imp.secondi * 1000))
+        const quanti = Math.ceil((comandiARotazione(memoria.grezza?.bots.length ?? 0, 1 + (memoria.grezza?.server?.length ?? 0)) * GIRO_CLI_MS) / (imp.secondi * 1000))
         // La coda si legge a ogni giro: gli item del bot scelto, o di tutti quando non ne è scelto nessuno.
         const orchestratore = quadro?.coda.presente && !quadro.coda.diTutti ? quadro.bot.find((b) => b.nome === quadro?.coda.bot)?.id : undefined
-        const grezza = await leggiCliAGiri(dip, imp.orca, memoria, { tutto, quanti, prioritario: orchestratore, tuttiGliItem: !imp.codaBot })
+        const grezza = await leggiCliAGiri(dip, imp.orca, memoria, { tutto, quanti, prioritario: orchestratore, tuttiGliItem: !imp.codaBot, server: imp.server })
         cli = { parte: normaCli(grezza, dip.casa), quando: adesso, errore: null }
       } catch (e) {
         cli = { ...cli, errore: messaggio(e) }
@@ -174,7 +175,7 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
     if (conCli || !workspaces) {
       try {
         workspaces = (await orca.host.call('workspace.list', { includeStatus: true })).workspaces as any[]
-        schedeApi = workspaces.map((w) => ({ id: String(w.id), path: String(w.path) }))
+        schedeApi = workspaces.map(daApi)
       } catch {
         workspaces = null
       }
@@ -281,16 +282,22 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
     if (percorso) {
       if (!schedeApi.length) {
         try {
-          schedeApi = ((await orca.host.call('workspace.list')).workspaces as any[]).map((w) => ({ id: String(w.id), path: String(w.path) }))
+          schedeApi = ((await orca.host.call('workspace.list')).workspaces as any[]).map(daApi)
         } catch {
           schedeApi = []
         }
       }
       // La scheda che contiene quella cartella: prima la stessa, poi la più vicina che la contiene.
       // La scheda sulla cartella di casa conterrebbe tutto: vale solo se è proprio quella.
-      const scheda = schedeApi
-        .filter((s) => percorso === s.path || (s.path.replace(/\/$/, '') !== dip.casa && percorso.startsWith(s.path.replace(/\/$/, '') + '/')))
-        .sort((x, y) => y.path.length - x.path.length)[0]
+      const adatte = schedeApi.filter((s) => percorso === s.path || (s.path.replace(/\/$/, '') !== dip.casa && percorso.startsWith(s.path.replace(/\/$/, '') + '/')))
+      // Con un server abbinato lo stesso percorso può esserci qui e là: vale la scheda del posto giusto.
+      // Il posto lo dice la CLI: il terminale è di una scheda sola; un percorso, se sta in un posto solo.
+      const lette = cli.parte?.schede ?? []
+      const diTerminale = terminale ? lette.find((s) => s.agenti.some((g) => g.terminale === terminale)) : undefined
+      const posti = [...new Set((diTerminale ? [diTerminale] : lette.filter((s) => espandi(s.percorso, dip.casa) === percorso)).map((s) => s.server ?? ''))]
+      const host = posti.length !== 1 ? undefined : posti[0] ? cli.parte?.server?.find((s) => s.nome === posti[0])?.host : 'local'
+      const delPosto = host ? adatte.filter((s) => (s.host ?? 'local') === host) : []
+      const scheda = (delPosto.length ? delPosto : adatte).sort((x, y) => y.path.length - x.path.length)[0]
       if (scheda) {
         try {
           await orca.host.call('workspace.open', { workspaceId: scheda.id })

@@ -36,6 +36,12 @@ Orca answers with what the plugin would be granted and a command to approve it. 
 
 Needs Orca 1.4.259 or newer. English only, for now.
 
+## With a paired Orca server
+
+If Orca on this machine is the window and a paired Orca server holds your bots and projects, the plugin reads both. Orca's CLI on this machine lists the server's bots but answers everything else for this machine only, so the plugin sends each bot's commands to the server the bot lives on (`--environment <name>`), and reads workspaces, messages, orchestration workers and automations from this machine and from every paired server, then joins them. Which servers exist it learns from the CLI itself; nothing has to be set. The header names the servers it reads, and says when one is not answering: what that server holds stays on screen as it was last read.
+
+A command to a server crosses the network and takes about a second, so those run up to six at a time; commands to this machine still run one after another.
+
 ## What it is allowed to do
 
 It is a full-access plugin (`trusted-worker`): part of it is Node code that runs with your user account. It has to be, because Orca's plugin API has no way to list bots, their items or the messages between agents; the plugin gets those by running Orca's own `orca` command.
@@ -53,7 +59,7 @@ It asks Orca for six capabilities:
 
 ### What it reads
 
-- **The `orca` CLI**, one command at a time, from a fixed list of eight read commands: `bot list`, `bot item list`, `bot work list`, `bot chats`, `worktree ps`, `automations list`, `orchestration inbox`, `orchestration worker-list`. A bot enters a command only by its id.
+- **The Orca CLI**, from a fixed list of eight read commands: `bot list`, `bot item list`, `bot work list`, `bot chats`, `worktree ps`, `automations list`, `orchestration inbox`, `orchestration worker-list`. A bot enters a command only by its id, and a paired server only by its name. On Linux the CLI is `orca-ide`; plain `orca` there is the GNOME screen reader, and the plugin never runs it.
 - **`~/.orca/bots/<bot>/bot.json`**, for the bot's id, name and avatar; and the bot's uploaded picture in that folder, if it has one (up to 1 MB, checked to be a real image, links refused).
 - **Orca's own mascot pictures**, from the Orca app on your machine, for bots that use one. The plugin does not ship them.
 - **Nothing else.** In particular, no file of your projects.
@@ -81,7 +87,8 @@ Everything works with nothing set. Settings → Plugins → Regia:
 | **Slow refresh, in seconds** | 20 | The queue, agent states and messages are re-read every 4 seconds; everything else in turns, and this is how long a full turn takes (10 to 300). |
 | **Bots not there yet** | empty | Names shown dashed in the diagram until a bot with that name exists. |
 | **State file (optional)** | empty | See "The optional state file" below. Empty: off. |
-| **Orca CLI executable** | empty | Only if `orca` is somewhere unusual. Empty: Orca's own CLI, then `orca` on the PATH. |
+| **Orca CLI executable** | empty | Only if the CLI is somewhere unusual. Empty: the CLI of the Orca app that runs the plugin, then the PATH (`orca`; on Linux `orca-ide`). |
+| **Paired Orca servers** | empty | Empty: every paired server Orca reports is read, next to this machine. Names separated by commas: only those. `local`: this machine only. |
 
 ### Titles
 
@@ -110,7 +117,8 @@ Without it nothing is missing from the other views, and no file is looked for. T
 - Orca's CLI returns up to 50 open items per bot and the last 40 messages; the panel shows those.
 - A bot's mascot is shown only where the Orca app is at its default macOS location. Elsewhere the bot gets a drawn icon derived from its name; uploaded pictures and emoji avatars work everywhere.
 - Names in the message list are inferred: Orca's mail records terminals and sessions, not names.
-- Not tried on Windows or Linux.
+- A bot that lives on a paired server gets a drawn icon: its picture is a file on the server, which the plugin does not read.
+- Tried on macOS and Linux, not on Windows.
 
 ## Tests
 

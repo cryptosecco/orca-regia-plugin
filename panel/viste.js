@@ -76,9 +76,12 @@ const chatDi = (b) => (b && b.sessione && b.sessione.percorso ? { percorso: b.se
 export function fonti(q, ora) {
   const f = q.fonti
   const righe = []
-  if (f.cli.ok) righe.push(['ok', T.fonti.botsCli(fa(f.cli.quando, ora))])
+  // I server Orca abbinati letti oltre a questa macchina: si nominano, e uno che tace si segnala.
+  const server = Array.isArray(f.cli.server) ? f.cli.server : []
+  if (f.cli.ok) righe.push(['ok', server.length ? T.fonti.botsCliWith(server.map((s) => s.nome).join(', '), fa(f.cli.quando, ora)) : T.fonti.botsCli(fa(f.cli.quando, ora))])
   else if (f.cli.quando) righe.push(['guasto', T.fonti.botsCliStale(fa(f.cli.quando, ora))])
   else righe.push(['guasto', f.motore.spento ? T.fonti.botsCliDown : T.fonti.botsCliOnlyState])
+  if (f.cli.ok) for (const s of server) if (!s.ok) righe.push(['guasto', T.fonti.serverSilent(s.nome)])
   // Il file di stato è facoltativo: se non è stato chiesto non se ne parla, non è un guasto.
   if (f.motore.ok) righe.push(['ok', T.fonti.officeState(fa(f.motore.aggiornato, ora))])
   else if (!f.motore.spento) {

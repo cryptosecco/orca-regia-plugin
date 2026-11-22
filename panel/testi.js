@@ -71,6 +71,9 @@ export const T = {
   // Header: where the data comes from and how old it is.
   fonti: {
     botsCli: (ago) => `Bots: Orca CLI, ${ago}`,
+    // With paired Orca servers: where the data was read, and a server that did not answer the last round.
+    botsCliWith: (servers, ago) => `Bots: Orca CLI, this machine and ${servers}, ${ago}`,
+    serverSilent: (server) => `Server ${server} is not answering: what it holds is the last data read`,
     botsCliStale: (ago) => `Bots: the CLI is not answering, data from ${ago}`,
     botsCliDown: 'Bots: the Orca CLI is not answering',
     botsCliOnlyState: 'Bots: the CLI is not answering, only what the state file knows',
