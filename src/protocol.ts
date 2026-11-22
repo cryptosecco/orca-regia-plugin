@@ -16,6 +16,8 @@ export type Scheda = {
   progetto: string
   nome: string
   percorso: string
+  /** Il server Orca abbinato su cui sta la scheda. Null o assente: questa macchina. */
+  server?: string | null
   tipo: 'worktree' | 'cartella'
   ramo: string
   stato: string
@@ -219,7 +221,8 @@ export type Coda = {
 }
 
 export type Fonti = {
-  cli: { ok: boolean; quando: number | null; errore: string | null }
+  /** `server`: i server Orca abbinati letti oltre a questa macchina, e se hanno risposto all'ultimo giro. */
+  cli: { ok: boolean; quando: number | null; errore: string | null; server?: { nome: string; ok: boolean }[] }
   /** `spento`: il file di stato facoltativo non è stato chiesto. Non è un guasto, e non si legge niente. */
   motore: { ok: boolean; aggiornato: number | null; errore: string | null; spento: boolean }
   ufficioDa: 'motore' | 'cli' | 'api' | 'niente'

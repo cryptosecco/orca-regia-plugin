@@ -43,14 +43,26 @@ export type Impostazioni = Opzioni & {
   botAttesi: string[]
   /** Path to an optional JSON state file with model, effort, context and overlaps. Empty: the source is off. */
   fileStato: string
-  /** Path to the `orca` executable. Empty: Orca's default location, then `orca` on the PATH. */
+  /** Path to the Orca CLI executable. Empty: the CLI of the Orca app that runs the plugin, then the PATH. */
   orca: string
+  /**
+   * The paired Orca servers to read next to this machine. Null: every server the Orca CLI reports
+   * (the default). A list: only those. Empty list: this machine only.
+   */
+  server: string[] | null
   /** False: every animation is stopped, whatever the system says. */
   animazioni: boolean
 }
 
 const testo = (v: unknown, massimo: number): string => (typeof v === 'string' ? v.trim().slice(0, massimo) : '')
 const elenco = (v: unknown, massimo: number): string[] => [...new Set(testo(v, massimo).split(',').map((n) => n.trim()).filter(Boolean))].slice(0, 40)
+
+/** Empty means every paired server; `local`, `none` or `off` alone means this machine only; otherwise the names listed. */
+function serverDa(v: unknown): string[] | null {
+  const nomi = elenco(v, 300)
+  if (!nomi.length) return null
+  return nomi.length === 1 && /^(local|none|off)$/i.test(nomi[0]) ? [] : nomi
+}
 
 /** From the raw settings (the keys of the manifest) to what the code uses. Anything missing or odd takes the default. */
 export function impostazioniDa(s: Record<string, unknown> | null | undefined): Impostazioni {
@@ -66,6 +78,7 @@ export function impostazioniDa(s: Record<string, unknown> | null | undefined): I
     botAttesi: elenco(g.expectedBots, 200),
     fileStato: testo(g.stateFile, 400),
     orca: testo(g.orcaCli, 400),
+    server: serverDa(g.servers),
     animazioni: g.animations !== 'off'
   }
 }

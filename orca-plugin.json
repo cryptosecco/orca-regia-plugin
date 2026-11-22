@@ -174,10 +174,19 @@
       {
         "key": "orcaCli",
         "title": "Orca CLI executable",
-        "description": "Leave empty to use Orca's own CLI, then `orca` on the PATH.",
+        "description": "Leave empty to use the CLI of the Orca app that runs this plugin, then the one on the PATH (`orca`; on Linux `orca-ide`, because `orca` there is the GNOME screen reader and is never run).",
         "type": "string",
         "default": "",
         "maxLength": 400
+      },
+      {
+        "key": "servers",
+        "title": "Paired Orca servers",
+        "description": "If your bots and projects live on a paired Orca server, their items, agents, messages and automations are read from it too. Leave empty to read every paired server Orca reports, next to this machine. Or write the names to read, separated by commas; `local` reads this machine only.",
+        "type": "string",
+        "default": "",
+        "maxLength": 300,
+        "placeholder": "every paired server"
       }
     ]
   },
