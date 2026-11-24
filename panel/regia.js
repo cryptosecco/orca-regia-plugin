@@ -21,11 +21,15 @@ let vista = 'panoramica'
 // `aperte`: le voci della coda con la domanda aperta (per uid), così un ridisegno non le richiude.
 // Della coda: `filtro` («oggi», «decidere», «corso»), `progetto` (una corsia sola; undefined: tutte) e
 // `chiuse`, le corsie richiuse, che restano nello storage del plugin (storage:own) tra una volta e l'altra.
-const scelte = { tipo: '', tutti: false, stato: '', fornitore: '', aperte: [], filtro: '', progetto: undefined, chiuse: [] }
+// Dell'Office: `lista` (l'elenco di schede al posto della mappa) e `scelto` (l'avatar con la scheda aperta).
+const scelte = { lista: false, scelto: '', tipo: '', tutti: false, stato: '', fornitore: '', aperte: [], filtro: '', progetto: undefined, chiuse: [] }
 const CHIAVE_CHIUSE = 'coda.corsieChiuse'
+// L'elenco aperto sotto il tabellone: `fisso` l'ha aperto un clic (o un tocco), `sopra` il passaggio del mouse.
+const tab = { fisso: '', sopra: '' }
+const chiudiTab = () => { tab.fisso = ''; tab.sopra = '' }
 // Gli agenti avviati dai bot che sono appena nati, che hanno appena finito o che non ci sono più: per un
 // attimo il diagramma li disegna con la loro animazione (viste.js: nasce, spegne, esce).
-const mosse = { nati: new Map(), spenti: new Map(), usciti: [] }
+const mosse = { nati: new Map(), spenti: new Map(), usciti: [], entrati: new Map(), partiti: [] }
 const DURA_MOSSA = 1400
 let timerMosse = 0
 const ultimo = { vista: '', fonti: '', schede: '', piede: '', tabellone: '' }
@@ -96,7 +100,8 @@ async function chiedi(id, impronta) {
 // Un'immagine caricata che il browser non riesce a mostrare: quel bot resta con l'icona disegnata.
 const senzaGuaste = (q) => (guaste.size ? { ...q, bot: q.bot.map((b) => (b.fotoSua && guaste.has(b.id + '\n' + b.fotoSua.impronta) ? { ...b, fotoSua: null } : b)) } : q)
 document.addEventListener('error', (evento) => {
-  const f = evento.target instanceof Element ? evento.target.closest('[data-sua]') : null
+  // Il simbolo di un fornitore che non si carica non c'entra con la foto del bot che gli sta sopra.
+  const f = evento.target instanceof Element && !evento.target.closest('.marchio') ? evento.target.closest('[data-sua]') : null
   if (!f) return
   guaste.add(f.dataset.sua + '\n' + f.dataset.impronta)
   disegna()
@@ -114,14 +119,14 @@ function disegna() {
     'schede'
   )
   metti($('scr'), V.piede(quadro), 'piede')
-  metti($('tabellone'), V.tabellone(quadro, { vista, stato: scelte.stato, fornitore: scelte.fornitore }), 'tabellone')
+  metti($('tabellone'), V.tabellone(senzaGuaste(quadro), { vista, stato: scelte.stato, fornitore: scelte.fornitore, aperto: tab.sopra || tab.fisso }), 'tabellone')
   for (const el of $('tabellone').querySelectorAll('[data-conta]')) {
     const prima = contiPrima.get(el.dataset.conta)
     contiPrima.set(el.dataset.conta, el.textContent)
     // Il numero è cambiato: una piccola animazione (il CSS la spegne con «riduci movimento»).
     if (prima !== undefined && prima !== el.textContent && !fermo) el.classList.add(Number(el.textContent) > Number(prima) ? 'sale' : 'scende')
   }
-  metti($('vista'), VISTE[vista](senzaGuaste(quadro), ora, { ...scelte, nati: [...mosse.nati.keys()], spenti: [...mosse.spenti.keys()], usciti: mosse.usciti }), 'vista')
+  metti($('vista'), VISTE[vista](senzaGuaste(quadro), ora, { ...scelte, nati: [...mosse.nati.keys()], spenti: [...mosse.spenti.keys()], usciti: mosse.usciti, entrati: [...mosse.entrati.keys()], partiti: mosse.partiti }), 'vista')
 }
 
 function avviso(testo) {
@@ -134,6 +139,8 @@ function avviso(testo) {
 
 /** Chi sono i figli dei bot in un quadro, per chiave. */
 const figliIn = (q) => new Map((q?.bot ?? []).flatMap((b) => (b.figli ?? []).map((f) => [f.chiave, { ...f, bot: b.nome }])))
+/** Gli agenti dell'Office in un quadro, per chiave, ognuno con la sua stanza. */
+const agentiIn = (q) => new Map((q?.progetti ?? []).flatMap((p) => p.agenti.map((a) => [V.chiaveAgente(a, p.nome), { ...a, chiave: V.chiaveAgente(a, p.nome), progetto: p.nome }])))
 /**
  * Tra un quadro e il successivo: chi è nato, chi ha appena finito, chi è sparito. Con «riduci movimento»
  * non si anima niente: i nodini compaiono e spariscono e basta. Al primo quadro nessuno «nasce».
@@ -148,17 +155,23 @@ function muovi(prima, dopo) {
   }
   for (const [k, f] of vecchi) if (!nuovi.has(k)) mosse.usciti.push({ ...f, fino: c })
   mosse.usciti = mosse.usciti.filter((u) => !nuovi.has(u.chiave)).slice(-24)
-  if (!mosse.nati.size && !mosse.spenti.size && !mosse.usciti.length) return
+  // Lo stesso per gli agenti nelle stanze dell'Office: chi arriva entra, chi non c'è più esce.
+  const erano = agentiIn(prima), sono = agentiIn(dopo)
+  for (const k of sono.keys()) if (!erano.has(k)) mosse.entrati.set(k, c)
+  for (const [k, a] of erano) if (!sono.has(k)) mosse.partiti.push({ ...a, fino: c })
+  mosse.partiti = mosse.partiti.filter((u) => !sono.has(u.chiave)).slice(-24)
+  if (!mosse.nati.size && !mosse.spenti.size && !mosse.usciti.length && !mosse.entrati.size && !mosse.partiti.length) return
   clearTimeout(timerMosse)
   timerMosse = setTimeout(posa, DURA_MOSSA + 50)
 }
-/** Finita l'animazione, i nodini tornano fermi e quelli spariti se ne vanno. */
+/** Finita l'animazione, nodini e avatar tornano fermi e quelli spariti se ne vanno. */
 function posa() {
   const ora = Date.now()
-  for (const m of [mosse.nati, mosse.spenti]) for (const [k, fino] of m) if (fino <= ora) m.delete(k)
+  for (const m of [mosse.nati, mosse.spenti, mosse.entrati]) for (const [k, fino] of m) if (fino <= ora) m.delete(k)
   mosse.usciti = mosse.usciti.filter((u) => u.fino > ora)
+  mosse.partiti = mosse.partiti.filter((u) => u.fino > ora)
   disegna()
-  if (mosse.nati.size || mosse.spenti.size || mosse.usciti.length) timerMosse = setTimeout(posa, 300)
+  if (mosse.nati.size || mosse.spenti.size || mosse.usciti.length || mosse.entrati.size || mosse.partiti.length) timerMosse = setTimeout(posa, 300)
 }
 
 async function carica(nome = 'regia.quadro') {
@@ -231,11 +244,22 @@ async function apriInOrca(d) {
 }
 
 document.addEventListener('click', async (evento) => {
-  const el = evento.target instanceof Element ? evento.target.closest('button, [data-apri], [data-vai], [data-vista]') : null
+  const el = evento.target instanceof Element ? evento.target.closest('button, [data-apri], [data-vai], [data-vista], [data-scegli]') : null
+  // Un clic fuori dal tabellone richiude il suo elenco; uno dentro (una riga, «show in Office») pure, dopo aver fatto il suo.
+  const fuori = !(evento.target instanceof Element && evento.target.closest('#tabellone'))
+  if ((tab.fisso || tab.sopra) && (fuori || (el && !('tab' in el.dataset)))) {
+    chiudiTab()
+    if (!el) disegna()
+  }
   if (!el) return
   const d = el.dataset
   nascondiFumetto()
-  if (el.id === 'aggiorna') {
+  if ('tab' in d) {
+    // Un numero del tabellone: il clic (o il tocco) apre e fissa l'elenco dei suoi agenti, un altro lo chiude.
+    tab.fisso = tab.fisso === d.tab ? '' : d.tab
+    tab.sopra = ''
+    disegna()
+  } else if (el.id === 'aggiorna') {
     el.disabled = true
     await carica('regia.aggiorna')
     el.disabled = false
@@ -251,6 +275,14 @@ document.addEventListener('click', async (evento) => {
     scrollTo(0, 0)
   } else if (d.vai) {
     vai(d.vai)
+  } else if ('scegli' in d) {
+    // Un clic su un avatar apre la sua scheda sotto la mappa; un altro clic, o la ✕, la chiude.
+    scelte.scelto = scelte.scelto === d.scegli ? '' : d.scegli
+    disegna()
+    if (scelte.scelto) $('scheda-agente')?.scrollIntoView({ block: 'nearest', behavior: fermo ? 'auto' : 'smooth' })
+  } else if ('ufficioLista' in d) {
+    scelte.lista = Boolean(d.ufficioLista)
+    disegna()
   } else if ('filtroCoda' in d) {
     // «all» toglie anche il progetto; gli altri filtri si sommano alla corsia scelta.
     scelte.filtro = d.filtroCoda
@@ -274,8 +306,23 @@ document.addEventListener('click', async (evento) => {
     scelte.stato = d.filtroStato
     disegna()
   } else if (d.apri) {
+    disegna()
     await apriInOrca(d)
   }
+})
+
+// Col mouse basta passare sopra un numero del tabellone; l'elenco resta finché il mouse è sul tabellone.
+document.addEventListener('pointerover', (evento) => {
+  if (evento.pointerType === 'touch') return
+  const el = evento.target instanceof Element ? evento.target.closest('[data-tab]') : null
+  if (!el || el.disabled || tab.sopra === el.dataset.tab) return
+  tab.sopra = el.dataset.tab
+  disegna()
+})
+$('tabellone').addEventListener('mouseleave', () => {
+  if (!tab.sopra) return
+  tab.sopra = ''
+  disegna()
 })
 
 // Il filtro per progetto è un menu: una corsia sola, oppure tutte.
@@ -288,7 +335,10 @@ document.addEventListener('change', (evento) => {
 
 // Da tastiera: i nodi del diagramma non sono <button>, quindi Invio e Spazio li premono qui.
 document.addEventListener('keydown', (evento) => {
-  if (evento.key === 'Escape') return nascondiFumetto()
+  if (evento.key === 'Escape') {
+    if (tab.fisso || tab.sopra) { chiudiTab(); disegna() }
+    return nascondiFumetto()
+  }
   if (evento.key !== 'Enter' && evento.key !== ' ') return
   const el = evento.target instanceof Element && evento.target.matches('[role="button"]:not(button)') ? evento.target : null
   if (!el) return

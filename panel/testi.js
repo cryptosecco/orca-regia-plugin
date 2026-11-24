@@ -11,6 +11,7 @@ export const T = {
   click: CLICK,
   openInOrca: 'Open in Orca',
   who: 'Who hands work to whom',
+  howToRead: 'how to read this',
 
   // Nouns with a singular and a plural form.
   n: {
@@ -30,6 +31,8 @@ export const T = {
     subAgent: ['sub-agent', 'sub-agents'],
     otherBot: ['other bot', 'other bots'],
     worker: ['worker', 'workers'],
+    room: ['room', 'rooms'],
+    subAgentWorking: ['sub-agent working', 'sub-agents working'],
     automationOff: ['automation off', 'automations off'],
     providerAgent: (nome) => [`${nome} agent`, `${nome} agents`]
   },
@@ -68,17 +71,35 @@ export const T = {
     open: 'open'
   },
 
-  // Header: where the data comes from and how old it is.
+  // Header: silent while everything arrives; a line shows only when a source is down.
   fonti: {
-    botsCli: (ago) => `Bots: Orca CLI, ${ago}`,
     botsCliStale: (ago) => `Bots: the CLI is not answering, data from ${ago}`,
     botsCliDown: 'Bots: the Orca CLI is not answering',
     botsCliOnlyState: 'Bots: the CLI is not answering, only what the state file knows',
-    officeState: (ago) => `Office and overlaps: state file, ${ago}`,
-    da: { cli: 'states from the CLI', api: 'states from Orca', motore: 'last data read', niente: 'no data' },
-    stateStale: (since, da) => `State file not updated${since ? ' for ' + since : ''}: ${da}, no context or overlaps`,
-    updated: (ago) => `updated ${ago}, live`,
-    justNow: 'just now'
+    notUpdating: (ago) => `Not updating: last data from ${ago}`
+  },
+
+  // The optional state file was asked for and has stopped being updated. None of this is ever shown to
+  // someone who set no state file.
+  fermo: {
+    title: 'State file stopped',
+    since: (dur, hm) => `for ${dur} · last data ${hm}`,
+    noData: 'it cannot be read',
+    lastWithCli: 'Sub-agents, context and cache show its last data, marked “not updated”. States come from the Orca CLI. No overlaps.',
+    lastOnly: 'Everything in the Office is its last data, marked “not updated”. No overlaps.',
+    without: {
+      cli: 'States come from the Orca CLI: model, effort, context, cache and sub-agents are missing. No overlaps.',
+      api: 'States come from Orca: no context, sub-agents or overlaps.',
+      motore: 'No context or overlaps.',
+      niente: 'No data on the agents: no context, sub-agents or overlaps.'
+    },
+    restart: 'Restart the program that writes the file set in the plugin’s “State file” setting, or clear that setting.',
+    notUpdated: 'not updated',
+    notUpdatedSince: (hm) => `not updated since ${hm}`,
+    lastValue: 'The state file has stopped: this is the last value it carried',
+    wasWorking: 'not updated: it was working when the state file stopped',
+    subsThen: (x) => `${x} when the state file stopped`,
+    avatar: (stato, hm) => `State file stopped: ${stato ? 'state, ' : ''}context and sub-agents not updated since ${hm}`
   },
 
   // The scoreboard on top of every view, and the line at the bottom.
@@ -90,7 +111,13 @@ export const T = {
     errors: 'errors',
     areWaiting: (x) => `${x} waiting on you`,
     inError: (x) => `${x} in error`,
-    other: 'other'
+    other: 'other',
+    openChat: 'Open its chat',
+    openTerminal: 'Open its terminal',
+    noDetail: 'no detail',
+    clearOffice: 'clear the Office filter ✕',
+    showInOffice: 'show in Office ›',
+    moreInOffice: (n) => `and ${n} more in the Office`
   },
   piede: {
     toDecide: (n) => `${n} to decide`,
@@ -122,6 +149,7 @@ export const T = {
   // Hover box lines (the ones that start with CLICK say what a click does).
   hover: {
     itsTerminal: CLICK + 'its terminal in Orca',
+    itsCard: CLICK + 'its card',
     workerTerminal: CLICK + 'the worker\'s terminal in Orca',
     queueView: CLICK + 'the Queue view',
     officeView: CLICK + 'the Office view',
@@ -358,12 +386,31 @@ export const T = {
     noAgents: 'No agents to show.',
     emptyRooms: 'Empty rooms',
     clickDesk: 'Clicking a desk takes Orca to that agent.',
+    onlyAria: (nome) => `${nome} only: clear the filter`,
+    only: 'only ✕',
+    howToShow: 'How to show the office',
+    map: 'map',
+    list: 'list',
+    legend: { working: 'at a desk, typing: working', waiting: '? waiting on you', error: '! error', couch: 'on the couch: idle or done', messages: 'messages' },
+    clickAvatar: 'Click an avatar to see what it is doing and open its chat or terminal.',
+    mapHelp: 'One room per project. Who is working sits at a desk and types; who is waiting on you has a question mark; the others rest on the couch at the bottom of the room. New workers walk in and leave when they are gone. A light travels between a bot and the agents it is talking to.',
+    avatarAria: (nome, tipo, stato, stanza) => `${nome}, ${tipo}, ${stato}, in ${stanza}`,
+    msgActive: (x) => `${x} today, active in the last 15 minutes`,
+    mapAria: (stanze, agenti) => `Office map: ${stanze}, ${agenti}. Avatars can be clicked.`,
+    openChat: 'open chat',
+    openTerminal: 'open terminal',
+    openInOrca: 'open in Orca',
+    noTab: 'Orca has no tab to open for this agent.',
+    closeCard: 'Close the card',
+    close: 'Close',
+    nothingToReport: 'Nothing to report right now.',
     notes: {
       cliOff: {
         cli: 'States come from the Orca CLI. An agent’s face is derived from its name.',
         api: 'The Orca CLI is not answering: only tabs with something in progress show, as Orca reports them.',
         niente: 'No source is answering.'
       },
+      cliWithLast: 'The state file is not being updated: states come from the Orca CLI. Model, effort, context, cache and sub-agents are the last ones it carried, marked “not updated”; an agent the CLI cannot see keeps its last state, faded.',
       full: {
         motore: 'The bar is the context used out of the model window; it turns amber at 60% and red at 80%. Cache is the time left before it expires. The state file carries model, effort, context and cache only for Claude Code sessions: for other agents they are missing. An agent’s face is derived from its name.',
         cli: 'The state file is not being updated: states come from the Orca CLI, and model, effort, context, cache and sub-agents are missing.',

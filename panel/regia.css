@@ -63,20 +63,49 @@ button { background: none; border: 0; padding: 0; cursor: pointer; text-align: i
 .viste button.amb .conta { color: inherit; }
 .viste .p { color: var(--spento); }
 
-/* Il tabellone: una riga sola in testa a ogni vista. Quanti lavorano adesso (grande), poi per fornitore,
-   e a destra chi aspetta una risposta e chi è in errore. Ogni numero è un tasto che filtra l'Office. */
-.tabellone { display: flex; align-items: stretch; gap: 0; margin: 0 12px; padding: 5px 0; border-bottom: 1px solid var(--riga2); font-size: 11px; white-space: nowrap; overflow: hidden; }
+/* Il tabellone, dal totale al dettaglio: quanti lavorano adesso (grande), poi un simbolo per ogni fornitore
+   che ha agenti al lavoro, e a destra chi aspetta una risposta e chi è in errore. Un numero apre sotto l'elenco
+   di quegli agenti (al passaggio del mouse, premuto, o al tocco). */
+.tabellone { position: relative; margin: 0 12px; padding: 5px 0; border-bottom: 1px solid var(--riga2); font-size: 11px; }
 .tabellone:empty { display: none; }
-.tab-n { display: inline-flex; align-items: baseline; gap: 5px; padding: 1px 7px; border: 1px solid transparent; color: var(--tenue); flex: none; }
+.tab-riga { display: flex; align-items: stretch; gap: 0; white-space: nowrap; overflow: hidden; }
+.tab-n { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border: 1px solid transparent; color: var(--tenue); flex: none; }
 .tab-n b { color: var(--c); font-weight: 700; font-size: 12.5px; display: inline-block; }
 .tab-n.primo { padding-left: 2px; }
-.tab-n.primo b { font-size: 16px; line-height: 1; }
+.tab-n.primo b { font-size: 18px; line-height: 1; }
 .tab-n.primo span { color: var(--testo); letter-spacing: 0.05em; text-transform: uppercase; font-weight: 600; }
-.tab-n.zero b { color: var(--spento); } .tab-n.zero { color: var(--spento); }
-.tab-n:hover { color: var(--testo); border-color: var(--riga); }
-.tab-n[aria-pressed="true"] { border-color: var(--c); color: var(--testo); background: color-mix(in srgb, var(--c) 12%, transparent); }
+.tab-n.zero b { color: var(--spento); } .tab-n.zero { color: var(--spento); cursor: default; }
+.tab-n:not(.zero):hover, .tab-n[aria-expanded="true"] { color: var(--testo); border-color: var(--riga); }
+.tab-n[aria-expanded="true"] { border-color: var(--c); }
+.tab-n.filtra { border-color: var(--c); color: var(--testo); background: color-mix(in srgb, var(--c) 12%, transparent); }
+.tab-n.forn { --m: 16px; --px: 2; gap: 6px; }
 .tab-forn { display: inline-flex; min-width: 0; overflow: hidden; border-left: 1px solid var(--riga2); margin-left: 3px; padding-left: 1px; }
+.tab-forn:empty { display: none; }
 .tab-altri { display: inline-flex; margin-left: auto; flex: none; border-left: 1px solid var(--riga2); }
+/* L'elenco sotto un numero: sta sopra la pagina, non la sposta. */
+.tab-chi { position: absolute; left: 0; right: 0; top: 100%; z-index: 6; background: var(--fumetto); border: 1px solid var(--c); border-top: 0; box-shadow: 0 10px 26px #000c; padding: 7px 8px 8px; max-height: min(60vh, 420px); overflow: auto; }
+.tab-chi-t { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 2px 12px; color: var(--testo); margin-bottom: 5px; }
+.tab-chi ul { display: grid; gap: 2px; }
+.tab-chi > .muto { margin-top: 5px; }
+.chi-r { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "f n d" "f a a"; gap: 0 8px; align-items: center; width: 100%; padding: 3px 4px; border: 1px solid transparent; }
+.chi-r:hover { border-color: var(--riga); background: var(--pan2); }
+.chi-r .pfp { --lato: 26px; grid-area: f; border-width: 1px; }
+.chi-nome { grid-area: n; color: var(--testo); font-weight: 600; }
+.chi-dove { grid-area: d; color: var(--tenue); font-size: 10.5px; }
+.chi-fa { grid-area: a; color: var(--testo2); }
+
+/* I segni dei fornitori: forme semplici disegnate qui, col nome accanto. Quando il fornitore ha agenti al
+   lavoro il segno respira con `scale()` e opacità; con prefers-reduced-motion resta fermo. */
+.marchio { display: inline-flex; align-items: center; gap: 4px; flex: none; vertical-align: middle; }
+.marchio svg { width: calc(var(--m, 14px) * 0.72); height: calc(var(--m, 14px) * 0.72); display: block; fill: currentColor; }
+.marchio svg .vuoto { fill: none; stroke: currentColor; stroke-width: 1.4; }
+.marchio.vivo svg { animation: respiro 2.6s ease-in-out infinite; }
+@keyframes respiro { 0%, 100% { transform: scale(1); opacity: 0.84; } 50% { transform: scale(1.14); opacity: 1; } }
+/* Nel cartellino sotto la foto: sempre su fondo scuro, anche quando la scheda è accesa. */
+.pfp .cart.marca, .acceso .pfp .cart.marca, .viva .pfp .cart.marca { --m: 12px; padding: 1px 3px; background: var(--sup); color: var(--c, var(--menta2)); border-color: var(--riga); overflow: visible; font-weight: 400; line-height: 1; }
+.carta.ferma .pfp .cart.marca { display: block; --m: 9px; bottom: -7px; }
+.legenda button .marchio { --m: 13px; margin-right: -1px; }
+.stat .marchio { --m: 13px; }
 .tab-n b.sale { animation: sale 0.7s cubic-bezier(0.16, 1, 0.3, 1); }
 .tab-n b.scende { animation: scende 0.7s cubic-bezier(0.16, 1, 0.3, 1); }
 @keyframes sale { from { transform: translateY(5px); opacity: 0.2; filter: drop-shadow(0 0 5px var(--c)); } }
@@ -84,10 +113,35 @@ button { background: none; border: 0; padding: 0; cursor: pointer; text-align: i
 
 /* Da dove arrivano i dati, e gli avvisi */
 .fonti { display: grid; gap: 4px; padding: 8px 12px 0; font-size: 11.5px; color: var(--tenue); }
+.fonti:empty { display: none; }
 .fonte { display: flex; gap: 7px; align-items: baseline; min-width: 0; }
 .fonte .segno { color: var(--verde); }
 .fonte.guasto { border: 1px solid var(--rosso); color: var(--testo); padding: 4px 9px; background: var(--guasto-f); }
 .fonte.guasto .segno { color: var(--rosso); }
+/* Il file di stato è fermo: una fascia rossa in testa al pannello, in tutte le viste, che resta su mentre si scorre.
+   Rosso perché è uno stato (un guasto), non un'azione. Niente animazioni: deve solo essere lì. */
+.motore-fermo { display: grid; gap: 3px; border: 1px solid var(--rosso); border-left-width: 4px; background: var(--guasto-f); color: var(--testo); padding: 8px 11px; font-size: 12px; line-height: 1.4; min-width: 0; }
+.motore-fermo .mf-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 9px; font-size: 13px; }
+.motore-fermo .mf-t .segno { color: var(--rosso); }
+.motore-fermo .mf-t b { color: var(--rosso); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.motore-fermo .mf-da { font-variant-numeric: tabular-nums; }
+.motore-fermo .mf-c { color: var(--chiaro, var(--testo)); }
+.motore-fermo .mf-r { color: var(--tenue); }
+.motore-fermo code { font: inherit; color: var(--testo); user-select: all; overflow-wrap: anywhere; }
+.testa .fonti { padding: 6px 12px 8px; }
+/* Un dato dell'ultimo file di stato, che ora è fermo: resta, spento, col suo cartellino. */
+.non-agg { color: var(--rosso); font-size: 11px; white-space: nowrap; }
+.stat .non-agg { justify-self: start; border: 1px dashed var(--rosso); padding: 0 6px; margin-bottom: 2px; }
+.stat.vecchia .v, .stat.vecchia .barra-v, .stat.vecchia .seg { opacity: 0.55; }
+.stat.vecchia .conto { text-decoration: line-through; }
+.carta.ferma .stat .non-agg { margin-left: var(--sep); }
+.avatar.stato-vecchio .volto, .avatar.stato-vecchio image, .avatar.stato-vecchio .anello, .avatar.stato-vecchio .tavolo, .avatar.stato-vecchio .schermo { opacity: 0.4; }
+.avatar.stato-vecchio .batte { display: none; }
+.avatar.stato-vecchio .anello { stroke-dasharray: 3 3; }
+.subs.vecchi circle { fill: none; stroke: var(--spento); stroke-width: 1.2; }
+.scrivania.stato-vecchio .chi { opacity: 0.6; }
+.figlio.vecchio .pip { stroke-dasharray: 2 2; }
+.righe li.vecchio .nome-figlio { color: var(--tenue); }
 .avviso { margin: 6px 12px 0; border: 1px solid var(--ambra); color: var(--ambra); padding: 4px 9px; background: var(--avviso-f); font-size: 11.5px; }
 
 main { padding: 14px 12px 12px; flex: 1; min-width: 0; width: 100%; max-width: 1240px; margin: 0 auto; }
@@ -487,6 +541,87 @@ h2 small.num { margin-left: auto; color: var(--testo); font-weight: 600; font-si
 .carta.ferma .stat .mancanti { display: block; order: 8; }
 .vuote { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 
+/* ---------- Office: la mappa dall'alto ----------
+   Una stanza per progetto, vista da sopra. Muri a bordo sottile, pavimento a puntini, una porta in basso.
+   In alto le scrivanie di chi è sveglio, in basso il divano di chi è fermo. Ogni agente è la sua foto in
+   un riquadro con l'anello del colore di stato: gli stessi colori del resto del pannello. */
+.modo-ufficio { display: flex; gap: 0; margin: -6px 0 12px; font-size: 11.5px; }
+.modo-ufficio button { border: 1px solid var(--riga); padding: 2px 10px; color: var(--tenue); }
+.modo-ufficio button + button { border-left: 0; }
+.modo-ufficio button:hover { color: var(--testo); }
+.modo-ufficio button[aria-pressed="true"] { border-color: var(--menta); color: var(--menta); box-shadow: 1px 0 0 var(--menta); }
+.mappa { border: 1px solid var(--riga); background: var(--velo); padding: 0; }
+.mappa svg { display: block; width: 100%; height: auto; overflow: visible; }
+.mappa > .largo { display: none; }
+.stanza-m .muro { fill: var(--pan); stroke: var(--riga); stroke-width: 1.5; }
+.stanza-m.viva .muro { stroke: var(--menta2); }
+.stanza-m .pavimento { stroke: none; pointer-events: none; }
+.punto-p { fill: var(--riga2); }
+.stanza-m .porta { stroke: var(--sup); stroke-width: 3; fill: none; }
+.stanza-m .divano { fill: var(--pan2); stroke: var(--riga2); stroke-width: 1; stroke-dasharray: 3 3; }
+.nome-stanza { font: 700 9.5px var(--mono); fill: var(--tenue); letter-spacing: 0.06em; text-transform: uppercase; }
+.stanza-m.viva .nome-stanza { fill: var(--menta); }
+.conta-stanza { font: 600 9.5px var(--mono); fill: var(--testo); }
+.avatar { --c: var(--menta2); cursor: pointer; transform-box: fill-box; transform-origin: 50% 100%; }
+.avatar.c-lavoro { --c: var(--blu); } .avatar.c-aspetta { --c: var(--ambra); } .avatar.c-errore { --c: var(--rosso); }
+.avatar.c-finito { --c: var(--verde); } .avatar.c-fermo, .avatar.c-previsto { --c: var(--spento); }
+.avatar .sfondo { fill: var(--pan2); stroke: none; }
+.avatar .anello { fill: none; stroke: var(--c); stroke-width: 1.5; }
+.avatar.viva .anello { stroke-width: 2; filter: drop-shadow(0 0 4px var(--c)); }
+.avatar.quieta { opacity: 0.62; }
+.avatar.quieta .anello { stroke-width: 1; }
+.avatar .volto { fill: var(--menta); shape-rendering: crispEdges; }
+.avatar .volto .o { fill: var(--menta2); }
+.avatar .ico { color: var(--c); }
+.avatar .ritratto rect.fondo { fill: var(--bg); stroke: none; }
+.avatar rect.cornice { fill: none; stroke: none; }
+.avatar .ritratto text.emoji { font: 15px/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
+.avatar.quieta .ritratto text.emoji { font-size: 10px; }
+.avatar .tavolo { fill: var(--sopra); stroke: var(--riga); stroke-width: 1; }
+.avatar .schermo { fill: var(--riga); }
+.avatar.c-lavoro .schermo { fill: var(--blu); filter: drop-shadow(0 0 3px var(--blu)); }
+.avatar .batte { fill: var(--blu); animation: batte-t 0.9s steps(1) infinite; }
+.avatar .batte.b1 { animation-delay: 0.3s; } .avatar .batte.b2 { animation-delay: 0.6s; }
+.avatar .nuvola rect { fill: var(--c); stroke: var(--sup); stroke-width: 1; }
+.avatar .nuvola text { font: 700 10px var(--mono); fill: var(--inchiostro); }
+.avatar.c-aspetta .nuvola { animation: dondola 1.6s ease-in-out infinite; }
+.avatar .subs circle { fill: var(--blu); stroke: var(--sup); stroke-width: 1; animation: batte 1.5s ease-in-out infinite; }
+.avatar .subs text { font: 600 7.5px var(--mono); fill: var(--blu); }
+.avatar .chi { font: 400 8px var(--mono); fill: var(--tenue); }
+.avatar.viva .chi { fill: var(--testo); }
+.avatar .presa { fill: transparent; stroke: none; }
+.avatar:hover { opacity: 1; }
+.avatar:hover .anello, .avatar.scelto .anello { stroke: var(--testo); stroke-width: 2; }
+.avatar.scelto { opacity: 1; }
+.avatar:focus-visible { outline: 1.5px solid var(--testo); outline-offset: 2px; }
+.avatar.entra { animation: entra 0.9s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.avatar.esce { animation: esce-a 1.2s ease-in both; pointer-events: none; }
+@keyframes batte-t { 0%, 100% { opacity: 0.25; } 33% { opacity: 1; } }
+@keyframes dondola { 50% { transform: translateY(-2px); } }
+@keyframes entra { from { opacity: 0; transform: translateY(26px); } }
+@keyframes esce-a { to { opacity: 0; transform: translateY(26px); } }
+/* I messaggi: una scia appena visibile tra i due avatar, e una luce che la percorre. */
+.impulso { --c: var(--blu); pointer-events: none; }
+.impulso.aspetta { --c: var(--ambra); }
+.impulso .scia { fill: none; stroke: var(--c); stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.35; }
+.impulso .luce-m { fill: none; stroke: color-mix(in srgb, var(--c) 55%, var(--lume)); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 5 95; animation: impulso 2.2s linear infinite; filter: drop-shadow(0 0 3px var(--c)); }
+@keyframes impulso { from { stroke-dashoffset: 5; } to { stroke-dashoffset: -95; } }
+.mappa-legenda { margin: 10px 0 0; font-size: 11.5px; gap: 2px 14px; }
+.pip-l.vuoto { background: none; border: 1px dashed var(--c); }
+/* La scheda dell'avatar scelto: resta in vista in fondo mentre si scorre la mappa. Non è una finestra sopra il resto. */
+.scheda-agente { position: sticky; bottom: 34px; z-index: 3; margin-top: 18px; display: grid; gap: 8px; background: var(--fumetto); padding: 14px 12px 10px; }
+.scheda-agente .chi { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 11px; align-items: start; padding-right: 22px; }
+.scheda-agente .pfp { --lato: 48px; }
+.scheda-agente .nome { font-size: 13.5px; font-weight: 700; color: var(--testo); }
+.scheda-agente .s { font-size: 11px; color: var(--c); }
+.scheda-agente .s .segno { color: inherit; }
+.scheda-agente .fa { font-size: 11px; color: var(--tenue); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; margin-top: 2px; }
+.scheda-agente .meta { font-size: 10.5px; color: var(--spento); display: flex; gap: 0 10px; flex-wrap: wrap; }
+.scheda-agente p.muto { font-size: 11px; }
+.scheda-agente .chiudi { position: absolute; top: 6px; right: 8px; color: var(--tenue); padding: 2px 5px; }
+.scheda-agente .chiudi:hover { color: var(--testo); }
+.scheda-agente .azioni { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+
 /* Incroci */
 .esito { padding: 9px 12px; }
 .esito h3 { margin-bottom: 2px; }
@@ -537,6 +672,104 @@ h2 + .zona { border-top: 0; padding-top: 0; }
 .piede .orol { color: var(--tenue); font-variant-numeric: tabular-nums; }
 @keyframes lamp { 50% { opacity: 0; } }
 
+/* ---------- La gerarchia visiva ----------
+   Quattro regole, per tutte le viste:
+   1. Tre livelli di testo e basta: titolo (15px, pieno), corpo (12.5px, chiaro), nota (11px, grigio --tenue).
+      Il grigio resta solo per le note; il testo non usa più --spento, che sul fondo non arriva a 4,5:1.
+   2. Il colore dice solo stato (ambra, blu, rosso, verde di «fatto») e azione (menta). I titoli delle
+      sezioni, i nomi delle corsie e le etichette delle righe sono neutri.
+   3. Più respiro: 30px tra i blocchi, 14-16px dentro le schede.
+   4. Un'etichetta si dice una volta, e una riga vuota non si scrive (questo è fatto in viste.js); le
+      spiegazioni lunghe stanno dietro «how to read this». */
+/* --- 1 e 2: titoli di sezione neutri e più grandi; il sottotitolo è una nota --- */
+h2 { color: var(--testo); font-size: 13.5px; letter-spacing: 0.04em; margin: 30px 0 12px; }
+h2 small { color: var(--tenue); font-size: 11px; }
+h2 small.num { color: var(--tenue); font-weight: 400; font-size: 11.5px; }
+main { padding-top: 18px; }
+
+/* --- Overview --- */
+.legenda.fili { font-size: 10.5px; gap: 2px 12px; margin-top: 8px; opacity: 0.85; }
+.bots { gap: 30px 16px; }
+.bot { padding: 16px 14px 12px; }
+.bot-nome { font-size: 15px; }
+.bot-cosa { color: var(--tenue); font-size: 11px; -webkit-line-clamp: 2; }
+/* La scheda tecnica: una nota, non il centro. Etichette grigie, valori chiari, niente righe vuote. */
+.bot .stat { font-size: 11px; padding-top: 9px; margin-top: 2px; }
+.bot .stat .k { color: var(--tenue); }
+.bot .stat .r.sub.zero { display: none; }
+/* Le righe della tabella: l'etichetta è una nota grigia, il valore è il testo. «now» è la riga che conta. */
+.tab { margin-top: 12px; }
+.tab th { color: var(--tenue); font-weight: 400; letter-spacing: 0.04em; }
+.tab th, .tab td { padding: 7px 0; border-top-color: transparent; }
+.tab tr:first-child th, .tab tr:first-child td { border-top: 1px solid var(--riga2); padding-top: 10px; }
+.tab tr:first-child td { font-size: 12.5px; }
+.tab tr:first-child td .pezzo:first-child { font-weight: 600; }
+.tab td .muto { color: var(--tenue); }
+/* La coda in breve dentro la scheda del bot che tiene la coda: il titolo neutro, i numeri restano di stato. */
+.coda-testa .t { color: var(--testo); }
+
+/* --- Queue --- */
+/* Le decisioni: carte staccate invece di una colonna di righe; in testa il titolo, il resto è nota. */
+.decidi { display: grid; gap: 10px; border: 0; background: none; }
+.dec, .dec + .dec { border: 1px solid var(--riga2); background: var(--carta); }
+.dec.p0 { border-left: 3px solid var(--p0); } .dec.p1 { border-left: 3px solid var(--p1); }
+.dec-tasto { padding: 14px 14px 12px; gap: 7px; }
+.dec-cosa { font-size: 15px; order: -1; }
+.dec-testa { order: 0; }
+.dec-testa .prog { font-size: 10.5px; color: var(--tenue); }
+.dec-testa .pal { display: none; }
+/* «answer in <bot>'s chat ›» si dice una volta, sotto l'elenco; sulla carta compare al passaggio. */
+.dec-piede .va { visibility: hidden; }
+.dec-tasto:hover .va, .dec-tasto:focus-visible .va { visibility: visible; }
+.dec-piede .muto { color: var(--tenue); }
+.sola-lettura { margin-top: 12px; color: var(--tenue); }
+/* I tre contatori: il numero è il titolo, l'etichetta la nota. */
+.conti { margin-bottom: 4px; }
+.conto-coda { padding: 12px 12px 10px; }
+.conto-coda b { font-size: 30px; }
+/* Le corsie: il nome del progetto neutro; sulle righe lo stato si scrive solo quando non è «waiting on you». */
+.corsia-testa { padding: 16px 2px 10px; }
+.corsia-testa .nome { color: var(--testo); }
+.voce + .voce { border-top-color: transparent; }
+.voce-testa { padding: 6px 4px 6px 5px; }
+.voce .sotto { color: var(--tenue); }
+.voce .st.c-aspetta { display: none; }
+.legenda-p { margin-top: 26px; }
+
+/* --- Le spiegazioni: chiuse, a un clic --- */
+details.nota { margin-top: 26px; max-width: 75ch; }
+details.nota summary { color: var(--tenue); font-size: 11px; cursor: pointer; width: fit-content; list-style: none; }
+details.nota summary::-webkit-details-marker { display: none; }
+details.nota summary::before { content: "? "; color: var(--menta2); }
+details.nota summary:hover, details.nota[open] summary { color: var(--menta); }
+details.nota p { margin-top: 6px; font-size: 11.5px; color: var(--testo2); }
+.diagramma + .legenda.fili + details.nota { margin-top: 8px; }
+
+/* --- Flows --- */
+/* I messaggi: chi scrive a chi è il titolo della riga, l'ora è una nota. */
+.posta .ora { color: var(--tenue); font-size: 11px; }
+.posta .chi .freccia { color: var(--tenue); }
+.piu.tasto { margin-top: 12px; }
+
+/* --- Office --- */
+.filtri.legenda { margin-bottom: 10px; }
+.mappa-legenda { font-size: 10.5px; gap: 2px 12px; margin: 10px 0 0; opacity: 0.85; }
+.come { color: var(--tenue); font-size: 11px; margin-top: 12px; }
+.uffici { margin-top: 6px; } .stanza { margin-bottom: 30px; padding: 16px 12px 12px; }
+.carta .meta, .scheda-agente .meta { color: var(--tenue); }
+.scheda-agente .nome { font-size: 15px; }
+.vuote { margin-top: -2px; }
+
+/* --- Overlaps --- */
+.esito { padding: 14px 14px 12px; }
+.esito h3 { font-size: 15px; margin-bottom: 4px; }
+.esito p { color: var(--tenue); font-size: 11.5px; }
+.zona { padding: 9px 0; }
+.zona .mono { color: var(--testo); }
+
+/* --- Testo che era «spento»: ora è una nota leggibile --- */
+.fredda, .manca, .breve-numeri b, .conto-coda.zero b { color: var(--tenue); }
+
 /* Con cinque viste, nel pannello stretto il numero resta solo dove c'è da guardare. */
 @container app (max-width: 460px) {
   .viste button:not(.amb) .conta { display: none; }
@@ -545,7 +778,7 @@ h2 + .zona { border-top: 0; padding-top: 0; }
   /* Nel pannello stretto il tabellone resta su una riga: «waiting» ed «errors» diventano il loro segno. */
   .tab-altri .tab-n span { display: none; }
   .tab-altri .c-aspetta b::before { content: "⚠\FE0E "; font-weight: 400; } .tab-altri .c-errore b::before { content: "✗ "; font-weight: 400; }
-  .tab-n { padding: 1px 5px; } .tab-n.forn.zero { display: none; }
+  .tab-n { padding: 1px 5px; }
 }
 @container app (max-width: 350px) {
   .viste button:not(.amb) .conta { display: none; }
@@ -560,6 +793,7 @@ h2 + .zona { border-top: 0; padding-top: 0; }
   .bots { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .scrivanie { grid-template-columns: repeat(auto-fill, minmax(264px, 1fr)); gap: 22px 14px; }
   .diagramma > .stretto { display: none; } .diagramma > .largo { display: block; }
+  .mappa > .stretto { display: none; } .mappa > .largo { display: block; }
   .arco-testo { font-size: 11px; } .nodo .ruolo, .pillola text { font-size: 10.5px; }
   /* La scheda del bot che tiene la coda prende tutta la riga: la scheda a sinistra, la coda accanto. */
   .bot.con-coda { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 0 20px; align-items: start; }
@@ -579,6 +813,8 @@ h2 + .zona { border-top: 0; padding-top: 0; }
   * { animation: none !important; transition: none !important; }
   /* I fili si fermano: restano i trattini col loro colore, pieno, e il quadratino su chi riceve. */
   .luce { display: none; } .mosso .arco { opacity: 1; } .mosso .capo { display: inline; }
+  /* Nella mappa: niente luce che corre (resta la scia), tasti e sub-agenti fermi e accesi. */
+  .impulso .luce-m { display: none; } .impulso .scia { opacity: 0.7; }
   .carta:hover { transform: none; }
 }
 /* Lo stesso quando le animazioni sono spente nelle impostazioni del plugin: regia.js mette `fermo` sulla pagina. */

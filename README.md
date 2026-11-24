@@ -15,15 +15,17 @@ The pictures on this page are mock-ups: the panel itself, on invented bots and p
 | **Overview** | A diagram of who hands work to whom: you, the bots, the agents each bot started, the pull requests. Dashes flow toward whoever receives the work; amber means something waits on you. Below it, one card per bot: what it is doing now, its open items, the agents it started, its next automation, the last thing it said. |
 | **Queue** | "Decide now": up to five items that wait on your answer, with the question and its options. Then every open item in lanes, by priority and deadline. |
 | **Flows** | The same diagram, and the recent messages between bots, coordinators and workers: subject and first line. |
-| **Office** | Every agent in every workspace, grouped by project: working, waiting on you, idle. A click takes Orca to that agent. |
+| **Office** | A map seen from above: one room per project, one avatar per bot and agent. Who is working sits at a desk, who waits on you has a question mark, the others rest on the couch. A click on an avatar opens its card, with the button for its chat or terminal. The list of before is one click away ("list"). |
 
-Above every view, a scoreboard counts the agents working now, by provider, and those waiting on you or failing. A status bar item shows how many decisions wait ("Regia · 3 to decide · 1 today"), and a desktop notification tells you when something new is waiting; it is never repeated for the same thing.
+Above every view, a scoreboard counts the agents working now, then by provider (only providers with someone at work), and those waiting on you or failing. Hovering or pressing a number lists exactly those agents, and from there one click goes to the agent or to the Office already filtered. Providers are shown with plain shapes and their names: the plugin ships no third-party logo.
+
+The header stays silent while everything arrives: a line appears only when a source stops answering. Long explanations sit behind "how to read this". A status bar item shows how many decisions wait ("Regia · 3 to decide · 1 today"), and a desktop notification tells you when something new is waiting; it is never repeated for the same thing.
 
 The panel updates by itself every few seconds, follows Orca's light or dark theme, and stops its animations when your system asks to reduce motion.
 
 | | |
 |---|---|
-| ![The Queue: three decisions to take now, then every open item in lanes by project](assets/queue-dark.webp) | ![The Office in the light theme: every agent grouped by project, with its state](assets/office-light.webp) |
+| ![The Queue: three decisions to take now, then every open item in lanes by project](assets/queue-dark.webp) | ![The Office in the light theme: a map with one room per project and an avatar per agent](assets/office-light.webp) |
 | ![The Overview in the light theme](assets/overview-light.webp) | ![The Queue in the light theme](assets/queue-light.webp) |
 
 ## Install
@@ -103,7 +105,9 @@ A deadline of today, or one already passed, moves the item to the top whatever i
 
 Orca's CLI tells the plugin which agents exist and what state they are in. It does not tell which model an agent runs, how full its context is, or which files it touches. If you have a tool that writes that to a JSON file, give its path here and the Office gains model, effort, context and cache for each agent, and a fifth view, **Overlaps**, shows when two agents touch the same files.
 
-Without it nothing is missing from the other views, and no file is looked for. The format is the one the plugin's `normaMotore` function reads (`src/norma.ts`); it is not a standard and may change.
+If that file stops being written (its `aggiornato` time is more than a minute old), the panel says so: a red band on top of every view and a red status bar item, "State file stopped", with since when. Its last data stays on screen, marked "not updated since 10:53", while agent states keep coming from the Orca CLI. Restart whatever writes the file, or clear the setting.
+
+Without a state file set none of this exists: nothing is missing from the other views, no file is looked for, and no warning about it is ever shown. The format is the one the plugin's `normaMotore` function reads (`src/norma.ts`); it is not a standard and may change.
 
 ## Limits
 

@@ -225,3 +225,22 @@ export function demoCli(now = Date.now()) {
 function msg(id, type, from, to, subject, body, at) {
   return { id, type, run_id: null, from_handle: `orca_session_id:chat-${from.home}`, to_handle: `orca_session_id:chat-${to.home}`, subject, body, payload: null, created_at: new Date(at).toISOString() }
 }
+
+/**
+ * An invented state file, in the shape the optional "State file" setting reads: model, effort, context,
+ * cache and sub-agents for the same invented sessions the CLI lists above. `age` is how long ago it was
+ * last written, in milliseconds: more than a minute, and the plugin treats it as stopped.
+ */
+export function demoState(now = Date.now(), age = 2000) {
+  const agent = (nome, terminaleOrca, cartella, altro = {}) => ({ nome, stato: 'al lavoro', dettaglio: '', fermoDaSecondi: 60, modello: 'opus-5-5', sforzo: 'high', contesto: 220_000, finestra: 1_000_000, cacheScadeTraSecondi: 2400, tipo: 'interattiva', cartella, terminaleOrca, domanda: '', tocca: [], subAgentiAttivi: [], subAgentiConclusi: 0, ...altro })
+  return {
+    aggiornato: new Date(now - age).toISOString(),
+    conteggi: {},
+    incroci: [],
+    progetti: [
+      { nome: 'orbit-api', schede: ['rate-limits'], agenti: [agent('Rate limits: middleware and tests', 'term_demo_rate', `${HOME}/code/orbit-api-rate-limits`, { dettaglio: 'Running the test suite', fermoDaSecondi: 540, contesto: 410_000, subAgentiAttivi: ['Explore: the middleware', 'Plan: the tests'], subAgentiConclusi: 3 })] },
+      { nome: 'field-notes', schede: ['release-notes'], agenti: [agent('Release notes 2.4', 'term_demo_notes', `${HOME}/code/field-notes-release-notes`, { stato: 'fermo', fermoDaSecondi: 2400, modello: 'sonnet-5-5', sforzo: 'medium', contesto: 90_000, cacheScadeTraSecondi: -600, subAgentiConclusi: 1 })] },
+      { nome: 'lumen-web', schede: ['main'], agenti: [agent('Pricing page copy', 'term_demo_web1', `${HOME}/code/lumen-web`, { dettaglio: 'Editing the pricing table', fermoDaSecondi: 840, modello: 'fable-5-2', sforzo: 'medium', contesto: 650_000, subAgentiAttivi: ['Explore: the old copy'], subAgentiConclusi: 2 })] }
+    ]
+  }
+}

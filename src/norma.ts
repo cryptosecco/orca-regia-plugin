@@ -8,7 +8,16 @@ import type { Agente, Attesa, Bot, Coda, Figlio, Fonti, Messaggio, Progetto, Qua
 
 type Grezzo = any
 
+/**
+ * Il file di stato è fermo se il suo `aggiornato` è più vecchio di un minuto: chi lo scrive lo rinnova ogni
+ * pochi secondi. Vale solo per chi ha impostato un file di stato; senza, questa fonte è spenta e non se ne parla.
+ */
 export const MOTORE_VECCHIO_MS = 60_000
+/** L'ora di un istante, «10:53», nel fuso della macchina. */
+export const oraDi = (quando: number): string => {
+  const d = new Date(quando)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 /** La cartella di un bot sotto ~/.orca/bots, da un percorso che ci finisce dentro. */
 export const casaDa = (percorso: unknown): string | null => /\.orca\/bots\/([A-Za-z0-9][A-Za-z0-9._-]{0,63})\/?$/.exec(String(percorso ?? ''))?.[1] ?? null
 
@@ -396,7 +405,7 @@ export function figliDi(bot: Bot, progetti: Progetto[], operai: Operaio[] = []):
     if (a.subConclusi !== null) conclusi = (conclusi ?? 0) + a.subConclusi
     // Di un sub-agente si sa solo che c'è: cosa fa non esce dal worker.
     for (let i = 0; i < a.subAttivi; i++) {
-      figli.push({ chiave: `s:${bot.id}:${n}:${i}`, nome: `sub-agent ${i + 1}`, tipo: 'sub', stato: 'lavoro', agente: 'Claude Code', da: null, apri: null })
+      figli.push({ chiave: `s:${bot.id}:${n}:${i}`, nome: `sub-agent ${i + 1}`, tipo: 'sub', stato: 'lavoro', agente: 'Claude Code', da: null, apri: null, ...(a.vecchio ? { vecchio: true } : {}) })
     }
   })
   figli.sort((x, y) => PESO_FIGLIO[x.stato] - PESO_FIGLIO[y.stato])
@@ -506,6 +515,51 @@ export function ufficioDaSchede(schede: Scheda[]): Progetto[] {
     }
   }
   return [...per.values()]
+}
+
+/**
+ * Il file di stato non viene più aggiornato, ma l'ultimo c'è ancora. Quei dati non spariscono: restano a
+ * schermo, segnati come non aggiornati (`vecchio`: l'ora dell'ultimo stato).
+ *
+ * Con la CLI (`schede`): lo stato di chi la CLI vede è quello fresco della CLI; un terminale che la CLI
+ * non elenca più è stato chiuso, e l'agente esce; un agente nuovo entra senza i dati del Motore (mancano,
+ * e si dice). Chi la CLI non vede (un agente fuori da Orca) resta col suo ultimo stato, segnato
+ * (`statoVecchio`). Senza CLI è così per tutti.
+ */
+export function ufficioFermo(motore: ParteMotore, schede: Scheda[] | null): Progetto[] {
+  const quando = motore.aggiornato ?? 0
+  // «Fermo da N secondi» valeva all'ora dell'ultimo stato: diventa un'ora, così l'età continua a crescere.
+  const invecchia = (a: Agente): Agente => ({ ...a, daSecondi: null, da: a.da ?? (a.daSecondi !== null && quando ? quando - a.daSecondi * 1000 : null), vecchio: quando })
+  if (!schede) return motore.progetti.map((p) => ({ ...p, agenti: p.agenti.map((a) => ({ ...invecchia(a), statoVecchio: true })) }))
+  const vivi = ufficioDaSchede(schede)
+  const dellaCli = vivi.flatMap((p) => p.agenti)
+  const delMotore = new Set(motore.progetti.flatMap((p) => p.agenti).map((a) => a.terminale).filter(Boolean))
+  const visti = new Set<Agente>()
+  // Lo stesso agente, come lo vede la CLI: dal terminale; chi per il Motore non ne ha uno (la chat di un
+  // bot, una chat di Orca) dal nome del bot o dalla cartella, tra quelli che il Motore non ha già per terminale.
+  const trova = (a: Agente): Agente | undefined => {
+    const liberi = dellaCli.filter((v) => !visti.has(v))
+    if (a.terminale) return liberi.find((v) => v.terminale === a.terminale)
+    const senza = liberi.filter((v) => !delMotore.has(v.terminale))
+    return a.bot ? senza.find((v) => v.bot && v.nome.toLowerCase() === a.nome.toLowerCase()) : senza.find((v) => !v.bot && Boolean(v.cartella) && v.cartella === a.cartella)
+  }
+  const progetti: Progetto[] = motore.progetti.map((p) => ({
+    ...p,
+    agenti: p.agenti.flatMap((a): Agente[] => {
+      const vivo = trova(a)
+      if (!vivo) return a.terminale ? [] : [{ ...invecchia(a), statoVecchio: true }]
+      visti.add(vivo)
+      return [{ ...invecchia(a), stato: vivo.stato, dettaglio: vivo.dettaglio || a.dettaglio, da: vivo.da ?? null, agente: vivo.agente || a.agente, scheda: vivo.scheda, ruolo: vivo.ruolo || a.ruolo }]
+    })
+  }))
+  for (const p of vivi) {
+    const nuovi = p.agenti.filter((a) => !visti.has(a))
+    if (!nuovi.length) continue
+    const suo = progetti.find((x) => x.nome === p.nome)
+    if (suo) suo.agenti.push(...nuovi)
+    else progetti.push({ ...p, agenti: nuovi })
+  }
+  return progetti
 }
 
 /** Ultimo ripiego: solo l'API dei plugin, una riga per scheda che ha qualcosa in corso. */
@@ -802,13 +856,14 @@ export function componi(x: Ingressi): Quadro {
     progetti = motore.progetti
     ufficioDa = 'motore'
   } else if (cli && !x.cli.errore) {
-    progetti = ufficioDaSchede(cli.schede)
+    // File di stato fermo: gli stati dalla CLI, e i suoi ultimi dati (se ci sono) segnati come non aggiornati.
+    progetti = motore ? ufficioFermo(motore, cli.schede) : ufficioDaSchede(cli.schede)
     ufficioDa = 'cli'
   } else if (x.api.workspaces) {
     progetti = ufficioDaApi(x.api.workspaces, x.casa)
     ufficioDa = 'api'
   } else {
-    progetti = motore?.progetti ?? (cli ? ufficioDaSchede(cli.schede) : [])
+    progetti = motore ? ufficioFermo(motore, null) : cli ? ufficioDaSchede(cli.schede) : []
     ufficioDa = motore ? 'motore' : cli ? 'cli' : 'niente'
   }
 
@@ -916,7 +971,7 @@ export function componi(x: Ingressi): Quadro {
     fermo: Boolean(x.fermo),
     fonti: {
       cli: { ok: Boolean(cli) && !x.cli.errore, quando: x.cli.quando, errore: x.cli.errore },
-      motore: { ok: motoreVivo, aggiornato: motore?.aggiornato ?? null, errore: x.motore.errore, spento: Boolean(x.motoreSpento) },
+      motore: { ok: motoreVivo, aggiornato: motore?.aggiornato ?? null, errore: x.motore.errore, spento: Boolean(x.motoreSpento), ...(agenti.some((a) => a.vecchio !== undefined) ? { ultimi: true } : {}) },
       ufficioDa,
       incrociDisponibili: ufficioDa === 'motore' && motoreVivo
     },
@@ -953,6 +1008,17 @@ export function voceBarra(q: Quadro, nome = NOME): { text: string; tone: 'warnin
   const di = q.coda.diTutti ? '' : corto(q.coda.bot, 24)
   if (!q.fonti.cli.ok && !q.fonti.motore.ok) {
     return { text: n || oggi ? testo : `${nome} · data stalled`, tone: 'danger', tooltip: q.fonti.motore.spento ? 'The Orca CLI is not answering: the data may be stale.' : 'Neither the Orca CLI nor the state file is answering: the data may be stale.' }
+  }
+  // Il file di stato è stato chiesto e non viene più aggiornato: la voce lo dice per prima cosa e diventa
+  // rossa, qualunque cosa ci sia in coda. L'ora è quella dell'ultimo stato (non «da N minuti»), così la voce
+  // non va riscritta a ogni giro. Chi non ha impostato un file di stato (`spento`) non lo vede mai.
+  if (!q.fonti.motore.ok && !q.fonti.motore.spento) {
+    const da = q.fonti.motore.aggiornato ? ` since ${oraDi(q.fonti.motore.aggiornato)}` : ''
+    const avviso = `State file stopped${da}: sub-agents, context and overlaps are not updated.\nRestart the program that writes it.`
+    const resto = voceBarra({ ...q, fonti: { ...q.fonti, motore: { ...q.fonti.motore, ok: true } } }, nome)
+    const coda = n || oggi ? resto.tooltip.split('\n') : []
+    while (coda.length && [avviso, ...coda].join('\n').length > MASSIMO_RIQUADRO) coda.pop()
+    return { text: [nome, 'state file stopped', n ? `${n} to decide` : '', oggi ? `${oggi} today` : ''].filter(Boolean).join(' · '), tone: 'danger', tooltip: [avviso, ...coda].join('\n').slice(0, MASSIMO_RIQUADRO) }
   }
   if (n || oggi) {
     // Orca accetta un riquadro di 256 caratteri al massimo (oltre, rifiuta tutta la voce): righe corte,

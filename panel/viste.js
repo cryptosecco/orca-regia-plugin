@@ -19,6 +19,13 @@ export const durata = (s) => {
   return Math.round(s / 86400) + T.tempo.unit.d
 }
 const fa = (ms, ora) => (ms ? T.tempo.ago(durata((ora - ms) / 1000)) : '')
+/** L'ora di un istante, «10:53», nel fuso della macchina. */
+export const oraDi = (ms) => {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+/** Il segno di un dato dell'ultimo file di stato, che ora è fermo: c'è ancora, ma non è aggiornato. */
+const nonAggiornato = (quando) => `<span class="non-agg" title="${T.fermo.lastValue}">${quando ? T.fermo.notUpdatedSince(oraDi(quando)) : T.fermo.notUpdated}</span>`
 const tra = (ms, ora) => (ms ? (ms >= ora ? T.tempo.in(durata((ms - ora) / 1000)) : T.tempo.late) : '')
 const due = (n) => String(n).padStart(2, '0')
 const MESI = T.tempo.months
@@ -49,6 +56,9 @@ const stato = (nome, testo) => `<span class="stato ${chiave(nome)}">${segno(chia
 const STATO_ITEM = { needs_you: ['aspetta te', T.stato.waitingOnYou], in_progress: ['al lavoro', T.stato.inProgress], done: ['finito', T.stato.closed], closed: ['finito', T.stato.closed], blocked: ['errore', T.stato.blocked], snoozed: ['fermo', T.stato.snoozed], planned: ['previsto', T.stato.planned] }
 const plurale = (n, uno, molti) => `${n} ${n === 1 ? uno : molti}`
 
+/** Una spiegazione lunga: resta a un clic, chiusa, invece di occupare la pagina con un paragrafo grigio. */
+const comeSiLegge = (testo) => `<details class="nota"><summary>${T.howToRead}</summary><p>${testo}</p></details>`
+
 /** Attributi di un elemento che, cliccato, porta Orca su una scheda o un terminale. */
 const apri = (bersaglio) =>
   bersaglio && (bersaglio.percorso || bersaglio.terminale)
@@ -72,23 +82,32 @@ const premibile = (chiaveFuoco, etichetta) => ` role="button" tabindex="0" data-
 /** La chat di un bot è la sua casa (~/.orca/bots/<nome>) come spazio di lavoro di Orca. */
 const chatDi = (b) => (b && b.sessione && b.sessione.percorso ? { percorso: b.sessione.percorso, terminale: null } : null)
 
-// ---------- intestazione: da dove arrivano i dati e quanto sono vecchi ----------
+// ---------- intestazione: un avviso solo quando una fonte è ferma ----------
+/**
+ * Finché tutto arriva, qui non c'è niente. Compare una riga
+ * solo per un problema: la CLI non risponde, il Motore è fermo, o il quadro è più vecchio di 30 secondi.
+ */
+/**
+ * Il file di stato è stato chiesto nelle impostazioni e non viene più aggiornato: una fascia rossa in testa
+ * al pannello, in tutte le viste, che dice da quanto è fermo e cosa a schermo non è più aggiornato. Chi non
+ * ha impostato un file di stato (`spento`) non la vede mai: per lui quella fonte non esiste, non è ferma.
+ */
+export function motoreFermo(q, ora) {
+  const f = q.fonti
+  if (f.motore.ok || f.motore.spento) return ''
+  const quando = f.motore.aggiornato
+  const da = quando ? T.fermo.since(durata((ora - quando) / 1000), oraDi(quando)) : T.fermo.noData
+  const cosa = f.motore.ultimi ? (f.ufficioDa === 'cli' ? T.fermo.lastWithCli : T.fermo.lastOnly) : T.fermo.without[f.ufficioDa]
+  return `<div class="motore-fermo"><span class="mf-t">${segno('errore')}<b>${T.fermo.title}</b><span class="mf-da">${e(da)}</span></span><span class="mf-c">${e(cosa)}</span><span class="mf-r">${T.fermo.restart}</span></div>`
+}
+
 export function fonti(q, ora) {
   const f = q.fonti
   const righe = []
-  if (f.cli.ok) righe.push(['ok', T.fonti.botsCli(fa(f.cli.quando, ora))])
-  else if (f.cli.quando) righe.push(['guasto', T.fonti.botsCliStale(fa(f.cli.quando, ora))])
-  else righe.push(['guasto', f.motore.spento ? T.fonti.botsCliDown : T.fonti.botsCliOnlyState])
-  // Il file di stato è facoltativo: se non è stato chiesto non se ne parla, non è un guasto.
-  if (f.motore.ok) righe.push(['ok', T.fonti.officeState(fa(f.motore.aggiornato, ora))])
-  else if (!f.motore.spento) {
-    const da = T.fonti.da[f.ufficioDa]
-    righe.push(['guasto', T.fonti.stateStale(f.motore.aggiornato ? durata((ora - f.motore.aggiornato) / 1000) : '', da)])
-  }
-  // In testa, quanto è fresco il quadro: il worker lo rifà da solo ogni pochi secondi, e il numero scorre.
   const eta = Math.max(0, Math.round((ora - q.quando) / 1000))
-  const fresco = `<span class="fonte ${eta > 30 ? 'guasto' : 'ok'} fresco">${segno(eta > 30 ? 'errore' : 'finito')}<span>${T.fonti.updated(eta < 2 ? T.fonti.justNow : fa(q.quando, ora))}</span></span>`
-  return fresco + righe.map(([k, t]) => `<span class="fonte ${k}">${segno(k === 'ok' ? 'finito' : 'errore')}<span>${e(t)}</span></span>`).join('')
+  if (eta > 30) righe.push(T.fonti.notUpdating(fa(q.quando, ora)))
+  if (!f.cli.ok) righe.push(f.cli.quando ? T.fonti.botsCliStale(fa(f.cli.quando, ora)) : f.motore.spento ? T.fonti.botsCliDown : T.fonti.botsCliOnlyState)
+  return motoreFermo(q, ora) + righe.map((t) => `<span class="fonte guasto">${segno('errore')}<span>${e(t)}</span></span>`).join('')
 }
 
 /** Di chi è la coda, a parole e già protetta per l'HTML: «Atlas's queue», oppure «the queue» quando è di tutti i bot. */
@@ -112,40 +131,84 @@ export function fornitoreDi(a) {
   }
   return riconosci(a.modello) || riconosci(a.agente) || 'altri'
 }
-/** I numeri del tabellone, dagli stessi agenti dell'Office: così un numero premuto filtra proprio quelli. */
-export function contiTabellone(q) {
-  const tutti = q.progetti.flatMap((p) => p.agenti)
-  const lavorano = tutti.filter((a) => a.stato === 'al lavoro')
-  return {
-    agenti: tutti.length,
-    lavoro: lavorano.length,
-    aspettano: tutti.filter((a) => a.stato === 'aspetta te').length,
-    errori: tutti.filter((a) => a.stato === 'errore').length,
-    fornitori: FORNITORI.map(([id, nome]) => ({ id, nome, lavoro: lavorano.filter((a) => fornitoreDi(a) === id).length, agenti: tutti.filter((a) => fornitoreDi(a) === id).length }))
-  }
-}
+// ---------- i simboli dei fornitori ----------
+const NOME_FORNITORE = Object.fromEntries(FORNITORI)
+// I segni dei fornitori: forme semplici, non marchi.
+const NEUTRI = { claude: '<circle cx="6" cy="6" r="4.4"/>', openai: '<rect x="1.8" y="1.8" width="8.4" height="8.4"/>', grok: '<path d="M6 1 11 6 6 11 1 6z"/>', gemini: '<path d="M6 1.4 11 10.4H1z"/>', altri: '<circle class="vuoto" cx="6" cy="6" r="3.9"/>' }
 /**
- * Il tabellone in testa a ogni vista, su una riga: quanti agenti lavorano adesso, quanti per fornitore,
- * quanti aspettano una risposta e quanti sono in errore. Ogni numero è un tasto che porta all'Office già
- * filtrato (premuto di nuovo, toglie il filtro). Un fornitore senza agenti non si vede; uno che ne ha ma
- * nessuno al lavoro resta spento. `vista`: la vista aperta e i filtri in uso, per segnare il tasto premuto.
+ * Al posto del nome di un fornitore scritto e basta: un segno neutro (una forma semplice, non un marchio)
+ * col nome accanto. Il plugin non porta con sé loghi o mascotte di terzi. `vivo`: quel fornitore ha agenti
+ * al lavoro, e il segno respira (solo scala e opacità, nel CSS). `dice`: un'etichetta diversa dal nome.
+ */
+export function marchio(id, { vivo = false, dice = '' } = {}) {
+  const nome = NOME_FORNITORE[id] || NOME_FORNITORE.altri, etichetta = e(dice || nome)
+  return `<span class="marchio neutro${vivo ? ' vivo' : ''}" role="img" aria-label="${etichetta}" title="${etichetta}"><svg viewBox="0 0 12 12" aria-hidden="true">${NEUTRI[id] || NEUTRI.altri}</svg><span class="nome-m">${e(nome)}</span></span>`
+}
+
+/**
+ * L'unico posto in cui si contano gli agenti: gli stessi dell'Office, ognuno una volta, divisi per stato e
+ * (chi lavora) per fornitore. Il numero grande, i numeri dei fornitori, le parole dette accanto, l'elenco
+ * che si apre, la riga in fondo e la scheda «Office» vengono tutti da qui, quindi non possono dire cose diverse.
+ */
+export function gruppiTabellone(q) {
+  const tutti = q.progetti.flatMap((p) => p.agenti.map((a) => ({ ...a, progetto: p.nome, chiave: chiaveAgente(a, p.nome) })))
+  const di = (s) => tutti.filter((a) => a.stato === s)
+  const lavoro = di('al lavoro')
+  return { tutti, lavoro, aspettano: di('aspetta te'), errori: di('errore'), fornitori: FORNITORI.map(([id, nome]) => ({ id, nome, lavoro: lavoro.filter((a) => fornitoreDi(a) === id), agenti: tutti.filter((a) => fornitoreDi(a) === id).length })) }
+}
+/** Gli stessi gruppi, in numeri. */
+export function contiTabellone(q) {
+  const g = gruppiTabellone(q)
+  return { agenti: g.tutti.length, lavoro: g.lavoro.length, aspettano: g.aspettano.length, errori: g.errori.length, fornitori: g.fornitori.map((f) => ({ id: f.id, nome: f.nome, lavoro: f.lavoro.length, agenti: f.agenti })) }
+}
+const QUANTI_IN_ELENCO = 8
+/**
+ * Il tabellone in testa a ogni vista, dal totale al dettaglio: quanti agenti lavorano adesso (grande); poi,
+ * per ogni fornitore che ne ha almeno uno al lavoro, il suo simbolo col numero (chi è a zero non c'è); a
+ * destra chi aspetta una risposta e chi è in errore. Un numero, al passaggio del mouse o premuto (su touch, al
+ * tocco), apre sotto l'elenco di quegli agenti: un piccolo avatar, il nome e cosa stanno facendo; da lì un
+ * clic porta dall'agente, e «show in Office» apre l'Office filtrato. `vista.aperto` dice quale elenco è
+ * aperto; `vista.vista`, `stato` e `fornitore` servono a segnare il filtro in uso nell'Office.
  */
 export function tabellone(q, vista = {}) {
-  const c = contiTabellone(q)
+  const g = gruppiTabellone(q)
   const inOffice = vista.vista === 'ufficio'
-  const tasto = (chiave, n, nome, classe, stato, fornitore, dice) => {
-    const premuto = inOffice && (vista.stato || '') === stato && (vista.fornitore || '') === fornitore
-    return `<button type="button" class="tab-n ${classe}${n ? '' : ' zero'}" data-vista="ufficio" data-stato="${premuto ? '' : e(stato)}" data-fornitore="${premuto ? '' : fornitore}" data-k="tab:${chiave}" aria-pressed="${premuto}" title="${e(dice)}${premuto ? T.tabellone.clearFilter : ''}"><b class="num" data-conta="${chiave}">${n}</b><span>${nome}</span></button>`
+  const voci = [
+    { chiave: 'lavoro', lista: g.lavoro, classe: 'c-lavoro primo', stato: 'al lavoro', fornitore: '', dice: T.tabellone.ofWorking(g.lavoro.length, plurale(g.tutti.length, ...T.n.agent)), dentro: `<span>${T.tabellone.working}</span>` },
+    ...g.fornitori.filter((f) => f.lavoro.length).map((f) => ({ chiave: f.id, lista: f.lavoro, classe: 'c-lavoro forn', stato: 'al lavoro', fornitore: f.id, dice: T.tabellone.ofWorking(f.lavoro.length, plurale(f.agenti, ...T.n.providerAgent(f.nome))), prima: marchio(f.id, { vivo: true }) })),
+    { chiave: 'aspettano', lista: g.aspettano, classe: 'c-aspetta', stato: 'aspetta te', fornitore: '', dice: T.tabellone.areWaiting(plurale(g.aspettano.length, ...T.n.agentIs)), dentro: `<span>${T.tabellone.waiting}</span>` },
+    { chiave: 'errori', lista: g.errori, classe: 'c-errore', stato: 'errore', fornitore: '', dice: T.tabellone.inError(plurale(g.errori.length, ...T.n.agent)), dentro: `<span>${T.tabellone.errors}</span>` }
+  ]
+  const aperta = voci.find((v) => v.chiave === vista.aperto && v.lista.length) || null
+  const filtrato = (v) => inOffice && (vista.stato || '') === v.stato && (vista.fornitore || '') === v.fornitore
+  const tasto = (v) => {
+    const n = v.lista.length
+    return `<button type="button" class="tab-n ${v.classe}${n ? '' : ' zero'}${filtrato(v) ? ' filtra' : ''}" data-tab="${v.chiave}" data-k="tab:${v.chiave}" aria-label="${e(v.dice)}" aria-expanded="${aperta === v}"${n ? ' aria-controls="tab-chi"' : ' disabled'}>${v.prima || ''}<b class="num" data-conta="${v.chiave}">${n}</b>${v.dentro || ''}</button>`
   }
-  const fornitori = c.fornitori.filter((f) => f.agenti).map((f) => tasto(f.id, f.lavoro, f.nome, 'c-lavoro forn', 'al lavoro', f.id, T.tabellone.ofWorking(f.lavoro, plurale(f.agenti, ...T.n.providerAgent(f.nome))))).join('')
-  return `${tasto('lavoro', c.lavoro, T.tabellone.working, 'c-lavoro primo', 'al lavoro', '', T.tabellone.ofWorking(c.lavoro, plurale(c.agenti, ...T.n.agent)))}<span class="tab-forn">${fornitori}</span><span class="tab-altri">${tasto('aspettano', c.aspettano, T.tabellone.waiting, 'c-aspetta', 'aspetta te', '', T.tabellone.areWaiting(plurale(c.aspettano, ...T.n.agentIs)))}${tasto('errori', c.errori, T.tabellone.errors, 'c-errore', 'errore', '', T.tabellone.inError(plurale(c.errori, ...T.n.agent)))}</span>`
+  const [totale, ...altre] = voci
+  const fornitori = altre.filter((v) => v.fornitore), stati = altre.filter((v) => !v.fornitore)
+  return `<div class="tab-riga">${tasto(totale)}<span class="tab-forn">${fornitori.map(tasto).join('')}</span><span class="tab-altri">${stati.map(tasto).join('')}</span></div>${aperta ? elencoTabellone(q, aperta, filtrato(aperta)) : ''}`
+}
+/** L'elenco che si apre sotto un numero del tabellone: proprio gli agenti contati lì, uno per riga. */
+function elencoTabellone(q, v, filtrato) {
+  const fotoBot = new Map(q.bot.map((b) => [b.nome.toLowerCase(), { ico: chiaveIcona(b), foto: b.foto, sua: suaDi(b), emoji: b.emoji ?? null, chat: chatDi(b) }]))
+  const riga = (a) => {
+    const f = a.bot ? fotoBot.get(a.nome.toLowerCase()) : null
+    const bersaglio = (f && f.chat) || { percorso: a.cartella, terminale: a.terminale }
+    const fa = (a.stato === 'aspetta te' && a.domanda ? a.domanda : a.dettaglio) || ''
+    const secondi = a.daSecondi ?? (a.da ? (q.quando - a.da) / 1000 : null)
+    return `<li><button type="button" class="chi-r c-${chiave(a.stato)}" data-k="chi:${e(a.chiave)}"${azApri(bersaglio)} title="${a.bot ? T.tabellone.openChat : T.tabellone.openTerminal}">${ritratto({ nome: a.nome, bot: a.bot, ico: f ? f.ico : a.nome, foto: f ? f.foto : null, sua: f ? f.sua : null, emoji: f ? f.emoji : null })}<span class="chi-nome taglia">${e(a.nome)}</span><span class="chi-dove taglia">${e(a.bot ? T.bot.tag : a.progetto)}${secondi === null ? '' : ` · ${durata(secondi)}`}</span><span class="chi-fa taglia">${fa ? e(fa) : `<span class="muto">${T.tabellone.noDetail}</span>`}</span></button></li>`
+  }
+  const resto = v.lista.length - QUANTI_IN_ELENCO
+  const office = `<button type="button" class="collega" data-vista="ufficio" data-stato="${filtrato ? '' : e(v.stato)}" data-fornitore="${filtrato ? '' : v.fornitore}" data-k="chi:office">${filtrato ? T.tabellone.clearOffice : T.tabellone.showInOffice}</button>`
+  return `<div class="tab-chi ${v.classe.split(' ')[0]}" id="tab-chi" role="group" aria-label="${e(v.dice)}"><p class="tab-chi-t"><span>${e(v.dice)}</span>${office}</p><ul>${v.lista.slice(0, QUANTI_IN_ELENCO).map(riga).join('')}</ul>${resto > 0 ? `<p class="muto">${T.tabellone.moreInOffice(resto)}</p>` : ''}</div>`
 }
 
 /** La riga in fondo, come la barra di stato della prova 2: il riassunto in una frase. Il primo pezzo porta alla coda. */
 export function piede(q) {
-  const c = q.conteggi, n = q.coda.decidi.length, oggi = q.coda.oggi
+  const c = contiTabellone(q), n = q.coda.decidi.length, oggi = q.coda.oggi
   const coda = n || oggi ? [n ? T.piede.toDecide(n) : '', oggi ? T.piede.today(oggi) : ''].filter(Boolean).join(' · ') : T.piede.nothing
-  return `<button type="button" class="vai-coda"${azVai('coda')} title="${T.piede.goTo(laCoda(q.coda))}">${coda}</button> · ${plurale(c.agenti, ...T.n.agent)} · ${T.piede.working(c.lavoro)}${q.fonti.motore.spento ? '' : ` · ${plurale(c.incroci, ...T.n.overlap)}`}`
+  return `<button type="button" class="vai-coda"${azVai('coda')} title="${T.piede.goTo(laCoda(q.coda))}">${coda}</button> · ${plurale(c.agenti, ...T.n.agent)} · ${T.piede.working(c.lavoro)}${q.fonti.motore.spento ? '' : ` · ${plurale(q.incroci.length, ...T.n.overlap)}`}`
 }
 
 /** Il numero sulla scheda «Coda» conta le cose di «Decidi adesso», come la barra di stato: in ambra se ce ne sono. */
@@ -154,7 +217,7 @@ export function schede(q) {
     ['panoramica', T.schede.overview, q.bot.length, ''],
     ['coda', T.schede.queue, q.coda.decidi.length, q.coda.decidi.length ? 'aspetta' : ''],
     ['flussi', T.schede.flows, q.messaggi.length, ''],
-    ['ufficio', T.schede.office, q.conteggi.agenti, ''],
+    ['ufficio', T.schede.office, contiTabellone(q).agenti, ''],
     // Gli incroci li sa solo il file di stato facoltativo: senza, la scheda non c'è.
     ...(q.fonti.motore.spento ? [] : [['incroci', T.schede.overlaps, q.incroci.length, q.incroci.length ? 'aspetta' : '']])
   ]
@@ -253,8 +316,15 @@ export function voltoDalNome(nome) {
  *   - niente: l'icona disegnata, quella della sua casa (`ico`) o una ricavata dal nome.
  * Un agente porta il volto ricavato dal nome.
  */
-export function ritratto({ nome, ico = nome, bot = false, foto = null, sua = null, emoji = null, cart = '' }) {
-  const cartellino = cart ? `<span class="cart">${e(cart)}</span>` : ''
+/** Il cartellino di un agente: il simbolo del suo fornitore (che respira se lavora), o la parola se non si riconosce. */
+const cartDi = (a) => {
+  const id = fornitoreDi(a)
+  if (id === 'altri') return { cart: a.bot ? T.bot.tag : (a.agente || '').split(' ')[0].toLowerCase() }
+  return { marca: marchio(id, { vivo: a.stato === 'al lavoro' }) }
+}
+export function ritratto({ nome, ico = nome, bot = false, foto = null, sua = null, emoji = null, cart = '', marca = '' }) {
+  // `marca`: il simbolo del fornitore (HTML di `marchio`) al posto della parola nel cartellino.
+  const cartellino = marca ? `<span class="cart marca">${marca}</span>` : cart ? `<span class="cart">${e(cart)}</span>` : ''
   if (bot && !sua && emoji && !haFoto(foto)) return `<span class="pfp faccina" aria-hidden="true"><span class="vetro"><span class="emoji">${e(emoji)}</span></span>${cartellino}</span>`
   if (bot && sua) return `<span class="pfp sua${sua.intera ? ' intera' : ''} rotta"${datiSua(sua)} aria-hidden="true"><span class="vetro"><img alt="" decoding="async">${icona(ico)}</span>${cartellino}</span>`
   const mascotte = bot && haFoto(foto)
@@ -315,7 +385,9 @@ export function statistiche(a, ora, prima = '') {
   const cache = resta === null ? '' : resta > 0 ? `<span class="muto lungo">${T.stat.expiresIn}</span><span class="conto num" data-scade="${a.cacheScade}">${conto(resta)}</span>` : `<span class="fredda">${T.stat.cold}</span><span class="muto lungo">${T.tempo.forDur(durata(-resta))}</span>`
   const sub = a.subConclusi === null && !a.subAttivi ? '' : `${a.subAttivi ? `<span class="c-lavoro vivo">${a.subAttivi} ${T.stato.working}</span>` : `0 ${T.stato.working}`}${a.subConclusi === null ? '' : ` · ${a.subConclusi} ${T.stato.done}`}`
   const mancano = [[T.stat.model, a.modello], [T.stat.effort, sforzo], [T.stat.context, pct !== null], [T.stat.cache, cache], [T.stat.subAgents, sub]].filter(([, c]) => !c).map(([n]) => n)
-  return `<span class="stat">${prima}${rigaStat('modello', T.stat.model, e(a.modello))}${rigaStat('sforzo', T.stat.effort, sforzo)}${contesto}${rigaStat('cache', T.stat.cache, cache)}${rigaStat(`sub${a.subAttivi || a.subConclusi ? '' : ' zero'}`, T.stat.subAgents, sub)}${mancano.length ? `<span class="mancanti">${T.stat.missingList(mancano.join(', '))}</span>` : ''}</span>`
+  // File di stato fermo: i valori sono gli ultimi che portava. Restano, spenti, con «not updated since 10:53».
+  const vecchia = a.vecchio !== undefined
+  return `<span class="stat${vecchia ? ' vecchia' : ''}">${vecchia ? nonAggiornato(a.vecchio) : ''}${prima}${rigaStat('modello', T.stat.model, e(a.modello))}${rigaStat('sforzo', T.stat.effort, sforzo)}${contesto}${rigaStat('cache', T.stat.cache, cache)}${rigaStat(`sub${a.subAttivi || a.subConclusi ? '' : ' zero'}`, T.stat.subAgents, sub)}${mancano.length ? `<span class="mancanti">${T.stat.missingList(mancano.join(', '))}</span>` : ''}</span>`
 }
 
 // ---------- lo stato di un bot, uguale nel diagramma e nelle tabelle ----------
@@ -376,7 +448,7 @@ export function flusso(q, ora) {
       ...q.bot.filter((b) => b !== lead).map(diBot),
       ...q.botInArrivo.map((nome) => ({ nome, aperti: 0, ico: nome, foto: null, chat: null, previsto: true, stato: ['previsto', T.stato.comingSoon], figli: [], msg: 0, vivo: false, consegne: 0, inCorso: 0, msgWorker: 0, worker: [], fermi: 0 }))
     ],
-    ufficio: q.conteggi,
+    ufficio: contiTabellone(q),
     pr: { aperte: pr.length, rosse: pr.filter((s) => controlli(s.pr) === 'errore').length },
     messaggiOggi: diOggi.length
   }
@@ -441,9 +513,11 @@ const TIPO_FIGLIO = T.figlio.type
 const ATTIVO = (f) => f.stato === 'lavoro' || f.stato === 'aspetta' || f.stato === 'errore'
 /** Quanti figli per stato, in parole: «2 working, 1 waiting on you, 3 done». */
 export function contaFigli(figli) {
-  const n = (s) => figli.filter((f) => f.stato === s).length
+  // Un sub-agente visto nell'ultimo file di stato, ora fermo, non si conta tra chi lavora: c'era allora.
+  const freschi = figli.filter((f) => !f.vecchio), vecchi = figli.length - freschi.length
+  const n = (s) => freschi.filter((f) => f.stato === s).length
   const fatti = n('finito') + n('fermo')
-  return { attivi: figli.filter(ATTIVO).length, fatti, peggiore: n('aspetta') ? 'aspetta' : n('errore') ? 'errore' : n('lavoro') ? 'lavoro' : 'finito', parole: [[n('lavoro'), T.stato.working], [n('aspetta'), T.stato.waitingOnYou], [n('errore'), T.stato.failed], [fatti, T.stato.done]].filter(([x]) => x).map(([x, t]) => `${x} ${t}`).join(', ') }
+  return { attivi: freschi.filter(ATTIVO).length, fatti, vecchi, peggiore: n('aspetta') ? 'aspetta' : n('errore') ? 'errore' : n('lavoro') ? 'lavoro' : 'finito', parole: [[n('lavoro'), T.stato.working], [n('aspetta'), T.stato.waitingOnYou], [n('errore'), T.stato.failed], [fatti, T.stato.done], [vecchi, T.fermo.notUpdated]].filter(([x]) => x).map(([x, t]) => `${x} ${t}`).join(', ') }
 }
 /**
  * I figli di un nodo: un bollino col numero di quelli attivi, a cavallo dell'angolo in alto a sinistra, e
@@ -462,7 +536,7 @@ function figliSvg({ lista = [], usciti = [], nati = [], spenti = [], max = 5 }, 
     const da = f.da ? T.tempo.forDur(durata((padre.ora - f.da) / 1000)) : ''
     const azione = f.classe === ' esce' ? '' : azApri(f.apri)
     const forma = f.tipo === 'sub' ? `<circle class="pip" cx="${px + 5}" cy="${py + 5}" r="5"/>` : `<rect class="pip" x="${px}" y="${py}" width="10" height="10"/>`
-    return `<g class="figlio c-${f.stato}${f.classe}${azione ? ' clic' : ''}"${azione}${info(T.figlio.kindOf(f.nome, TIPO_FIGLIO[f.tipo] || TIPO_FIGLIO.agente, padre.nome), f.classe === ' esce' ? T.figlio.gone : `${STATO_FIGLIO[f.stato] || f.stato}${da}`, f.agente, azione ? T.hover.itsTerminal : '')} aria-hidden="true"><path class="stelo" d="M${px + 5} ${sotto} V${py}"/>${forma}<rect class="presa" x="${px - 2.5}" y="${sotto}" width="15" height="19"/></g>`
+    return `<g class="figlio c-${f.vecchio ? 'fermo vecchio' : f.stato}${f.classe}${azione ? ' clic' : ''}"${azione}${info(T.figlio.kindOf(f.nome, TIPO_FIGLIO[f.tipo] || TIPO_FIGLIO.agente, padre.nome), f.classe === ' esce' ? T.figlio.gone : f.vecchio ? T.fermo.wasWorking : `${STATO_FIGLIO[f.stato] || f.stato}${da}`, f.agente, azione ? T.hover.itsTerminal : '')} aria-hidden="true"><path class="stelo" d="M${px + 5} ${sotto} V${py}"/>${forma}<rect class="presa" x="${px - 2.5}" y="${sotto}" width="15" height="19"/></g>`
   }
   const piu = resto ? `<text class="figli-piu" x="${sinistra + 9 + mostrati.length * 15}" y="${sotto + 16}"${info(T.figlio.moreStartedBy(plurale(resto, ...T.n.moreAgent), padre.nome), T.figlio.listedBelow)}>+${resto}</text>` : ''
   const lb = String(c.attivi).length * 5.6 + 8
@@ -539,6 +613,9 @@ function disegno(f, largo, vista = {}) {
   /** Mette in fila dei nodi larghi `w` attorno alle ascisse volute, senza sovrapporli e senza uscire. */
   const inFila = (volute, w) => {
     const xs = [...volute]
+    // Il primo sta dentro il bordo sinistro prima di spingere gli altri: se lo si rimette dentro solo alla
+    // fine (il worker del primo bot vuole stare a x = 0), finisce sopra il secondo.
+    if (xs.length) xs[0] = Math.max(xs[0], 6 + w / 2)
     for (let i = 1; i < xs.length; i++) xs[i] = Math.max(xs[i], xs[i - 1] + w + 8)
     if (xs.length) xs[xs.length - 1] = Math.min(xs[xs.length - 1], W - 6 - w / 2)
     for (let i = xs.length - 2; i >= 0; i--) xs[i] = Math.min(xs[i], xs[i + 1] - w - 8)
@@ -723,7 +800,7 @@ export function diagramma(q, ora, vista = {}) {
       <span class="c-lavoro"><i class="pip-l tondo"></i>${T.diagramma.legend.subAgent}</span>
       <span class="muto">${plurale(f.messaggiOggi, ...T.n.messageToday)}</span>
     </div>
-    <p class="come muto">${T.diagramma.help(f.diTutti ? '' : T.diagramma.helpMsg(e(f.lead)))}</p>`
+    ${comeSiLegge(T.diagramma.help(f.diTutti ? '' : T.diagramma.helpMsg(e(f.lead))))}`
 }
 
 // ---------- la coda: «Decidi adesso», i contatori, le corsie (per progetto, o per bot) ----------
@@ -918,13 +995,16 @@ const titoloPulito = (q, b, item) => {
 
 function tabellaBot(b, ora, n, q, vista) {
   const [k, testo] = statoBot(b)
-  const testa = `<div class="bot-testa">${ritratto({ nome: b.nome, ico: chiaveIcona(b), bot: true, foto: b.foto, sua: suaDi(b), emoji: b.emoji ?? null, cart: T.bot.tag })}<div class="bot-chi"><div class="bot-riga"><span class="bot-nome taglia">${e(b.nome)}</span><span class="stato ${k}">${segno(k)}${e(testo)}</span></div><p class="bot-cosa">${e(b.specialita)}</p>${chatDi(b) ? `<button type="button" class="collega chat"${azApri(chatDi(b))}>${T.bot.openChat}</button>` : ''}</div></div>`
+  const testa = `<div class="bot-testa">${ritratto({ nome: b.nome, ico: chiaveIcona(b), bot: true, foto: b.foto, sua: suaDi(b), emoji: b.emoji ?? null })}<div class="bot-chi"><div class="bot-riga"><span class="bot-nome taglia">${e(b.nome)}</span><span class="stato ${k}">${segno(k)}${e(testo)}</span></div><p class="bot-cosa">${e(b.specialita)}</p>${chatDi(b) ? `<button type="button" class="collega chat"${azApri(chatDi(b))}>${T.bot.openChat}</button>` : ''}</div></div>`
   // La scheda personaggio: la sessione del bot come la vede il Motore (la sua casa è ~/.orca/bots/<nome>).
   const s = sessioneDi(q, b.nome)
-  const secondi = s ? (s.daSecondi ?? (s.da ? (ora - s.da) / 1000 : null)) : b.sessione && b.sessione.da ? (ora - b.sessione.da) / 1000 : null
-  const statoSessione = s ? s.stato : b.sessione ? b.sessione.stato : ''
-  const sessione = statoSessione ? `<span class="c-${chiave(statoSessione)} vivo">${e(dici(statoSessione))}</span>${secondi === null ? '' : T.tempo.forDur(durata(secondi))}` : ''
-  const perche = q.fonti.ufficioDa !== 'motore' ? T.bot.stateNotUpdated : s ? '' : T.bot.stateNoSession
+  // Lo stato della sessione: quello del file di stato, se è fresco; altrimenti quello che dice Orca del bot.
+  const ss = s && s.statoVecchio && b.sessione ? null : s
+  const secondi = ss ? (ss.daSecondi ?? (ss.da ? (ora - ss.da) / 1000 : null)) : b.sessione && b.sessione.da ? (ora - b.sessione.da) / 1000 : null
+  const statoSessione = ss ? ss.stato : b.sessione ? b.sessione.stato : ''
+  const sessione = statoSessione ? `<span class="c-${chiave(statoSessione)} vivo">${e(dici(statoSessione))}</span>${secondi === null ? '' : T.tempo.forDur(durata(secondi))}${ss && ss.statoVecchio ? ` · ${T.fermo.notUpdated}` : ''}` : ''
+  // Col file di stato fermo i suoi ultimi dati restano (segnati «not updated»): la riga serve solo se non ce ne sono.
+  const perche = s && s.vecchio !== undefined ? '' : q.fonti.ufficioDa !== 'motore' ? T.bot.stateNotUpdated : s ? '' : T.bot.stateNoSession
   // Senza il file di stato facoltativo modello, sforzo, contesto e cache non esistono: si mostra solo la sessione.
   const prime = rigaStat('agente', T.stat.agent, e(s ? s.agente : b.agente || '')) + rigaStat('sessione', T.stat.session, sessione)
   const scheda = q.fonti.motore.spento ? `<span class="stat">${prime}</span>` : `${statistiche(s, ora, prime)}${perche ? `<p class="senza muto">${T.bot.cannotRead(perche)}</p>` : ''}`
@@ -932,7 +1012,8 @@ function tabellaBot(b, ora, n, q, vista) {
   const eLaCoda = !q.coda.diTutti && b.nome === q.coda.bot
   const chiude = (resto) => `<article class="bot box c-${k}${k === 'fermo' ? '' : ' acceso'}${eLaCoda ? ' con-coda' : ''}" data-bot="${e(b.nome)}" tabindex="-1"><span class="tag">${nn(n)} ${T.bot.tag}</span>${eLaCoda ? `<div class="bot-sx">${testa}${scheda}${resto}</div>${codaInBreve(q, ora)}` : `${testa}${scheda}${resto}`}</article>`
   if (b.soloMotore) return chiude(`<div class="blocco muto">${T.bot.cliDown}</div>`)
-  const riga = (nome, valore) => `<tr><th scope="row">${nome}</th><td>${valore}</td></tr>`
+  // Una riga che direbbe solo «niente» (nessun agente avviato, nessuna automazione, niente di recente) non si scrive.
+  const riga = (nome, valore, vuota = false) => (vuota ? '' : `<tr><th scope="row">${nome}</th><td>${valore}</td></tr>`)
   const chat = b.chat[0]
 
   // Adesso: il task attivo (una consegna in corso o un item in corso), poi l'ultima richiesta ricevuta.
@@ -962,12 +1043,13 @@ function tabellaBot(b, ora, n, q, vista) {
     const w = f.apri ? b.worker.find((x) => x.percorso === f.apri.percorso) : null
     const ctl = w ? controlli(w.pr) : ''
     const nome = f.apri ? `<button type="button" class="collega nome"${apri(f.apri)}>${e(f.nome)}</button>` : `<span class="nome-figlio">${e(f.nome)}</span>`
+    if (f.vecchio) return `<li class="c-fermo vecchio">${segno('fermo')}<span>${nome} ${nonAggiornato(0)}<span class="etichette"><span class="etichetta">${TIPO_FIGLIO[f.tipo] || TIPO_FIGLIO.agente}</span></span></span></li>`
     return `<li class="c-${kk}">${segno(kk)}<span>${nome} <span class="vivo">${STATO_FIGLIO[f.stato] || e(f.stato)}${f.da ? T.tempo.forDur(durata((ora - f.da) / 1000)) : ''}</span>
       <span class="etichette"><span class="etichetta">${TIPO_FIGLIO[f.tipo] || TIPO_FIGLIO.agente}</span>${w && w.pr ? `<span class="etichetta">${T.pr.num(e(w.pr.numero))} ${e(w.pr.stato)}</span><span class="etichetta${ctl && ctl !== 'fermo' ? ` c-${ctl} vivo` : ''}">${T.pr.checks(e(w.pr.controlli || T.pr.none))}</span>` : ''}</span></span></li>`
   }).join('')
   const subFatti = b.subConclusi ? ` <span class="muto">· ${T.bot.subFinished(plurale(b.subConclusi, ...T.n.subAgent))}</span>` : ''
   const lavori = figli.length
-    ? `<b class="num">${figli.length}</b> ${T.bot.started}: ${[['lavoro', T.stato.working, 'lavoro'], ['aspetta', T.stato.waitingOnYou, 'aspetta'], ['errore', T.stato.failed, 'errore']].map(([st, t, kk]) => [figli.filter((f) => f.stato === st).length, t, kk]).filter(([x]) => x).map(([x, t, kk]) => `<span class="c-${kk} vivo">${x} ${t}</span>`).concat(totali.fatti ? [`<span class="muto">${totali.fatti} ${T.stato.done}</span>`] : []).join(', ')}${subFatti}<ul class="righe">${righeFigli}${figli.length > 6 ? `<li class="muto"><span></span><span>${T.bot.andMore(figli.length - 6)}</span></li>` : ''}</ul>${fermi ? `<span class="muto">${T.bot.andIdleTabs(plurale(fermi, ...T.n.idleTab))}</span>` : ''}`
+    ? `<b class="num">${figli.length}</b> ${T.bot.started}: ${[['lavoro', T.stato.working, 'lavoro'], ['aspetta', T.stato.waitingOnYou, 'aspetta'], ['errore', T.stato.failed, 'errore']].map(([st, t, kk]) => [figli.filter((f) => f.stato === st && !f.vecchio).length, t, kk]).filter(([x]) => x).map(([x, t, kk]) => `<span class="c-${kk} vivo">${x} ${t}</span>`).concat(totali.fatti ? [`<span class="muto">${totali.fatti} ${T.stato.done}</span>`] : [], totali.vecchi ? [`<span class="non-agg">${totali.vecchi} ${T.fermo.notUpdated}</span>`] : []).join(', ')}${subFatti}<ul class="righe">${righeFigli}${figli.length > 6 ? `<li class="muto"><span></span><span>${T.bot.andMore(figli.length - 6)}</span></li>` : ''}</ul>${fermi ? `<span class="muto">${T.bot.andIdleTabs(plurale(fermi, ...T.n.idleTab))}</span>` : ''}`
     : `<span class="muto">${T.bot.noAgents}${fermi ? `, ${plurale(fermi, ...T.n.idleTab)}` : ''}</span>${subFatti}`
 
   const prossime = b.automazioni.filter((a) => a.attiva && a.prossima).sort((x, y) => x.prossima - y.prossima)
@@ -975,11 +1057,11 @@ function tabellaBot(b, ora, n, q, vista) {
   const automazione = auto ? `${e(auto.nome)} <b class="num">${tra(auto.prossima, ora)}</b> <span class="muto">· ${e(regola(auto.regola))}${auto.controlloPrima ? ` · ${T.bot.runsOnlyIfNeeded}` : ''}${prossime.length > 1 ? ` · ${T.bot.andMore(prossime.length - 1)}` : ''}</span>` : `<span class="muto">${b.automazioni.length ? plurale(b.automazioni.length, ...T.n.automationOff) : T.bot.noAutomations}</span>`
   const detto = chat && chat.ultimoDetto ? `${e(chat.ultimoDetto)}${chat.ultimaAttivita ? ` <span class="muto">(${fa(chat.ultimaAttivita, ora)})</span>` : ''}` : `<span class="muto">${T.bot.nothingRecent}</span>`
 
-  return chiude(`<table class="tab"><tbody>${riga(T.bot.rows.now, adesso)}${riga(T.bot.rows.items, item)}${riga(T.bot.rows.spawned, lavori)}${riga(T.bot.rows.next, automazione)}${riga(T.bot.rows.said, detto)}</tbody></table>`)
+  return chiude(`<table class="tab"><tbody>${riga(T.bot.rows.now, adesso)}${riga(T.bot.rows.items, item)}${riga(T.bot.rows.spawned, lavori, !figli.length && !b.subConclusi && !fermi)}${riga(T.bot.rows.next, automazione, !auto)}${riga(T.bot.rows.said, detto, !(chat && chat.ultimoDetto))}</tbody></table>`)
 }
 
 const previstoHtml = (nome, n = 0) => `<article class="bot previsto" data-bot="${e(nome)}" tabindex="-1"><span class="tag">${nn(n)} ${T.bot.comingSoonTag}</span>
-    <div class="bot-testa">${ritratto({ nome, bot: true, cart: T.bot.tag })}<div class="bot-chi"><div class="bot-riga"><span class="bot-nome taglia">${e(nome)}</span>${stato('previsto', T.stato.comingSoon)}</div></div></div>
+    <div class="bot-testa">${ritratto({ nome, bot: true })}<div class="bot-chi"><div class="bot-riga"><span class="bot-nome taglia">${e(nome)}</span>${stato('previsto', T.stato.comingSoon)}</div></div></div>
     <div class="blocco muto">${T.bot.notBotYetLong}</div>
   </article>`
 
@@ -1033,31 +1115,37 @@ export function flussi(q, ora, vista = {}) {
     ${q.messaggi.length ? `<div class="filtri legenda"><button type="button" data-filtro-tipo="" aria-pressed="${!tipo}"><i></i>${T.flussi.all} <b>${q.messaggi.length}</b></button>${filtri.map(([t, n]) => `<button type="button" class="c-${TIPI[t][1]}" data-filtro-tipo="${t}" aria-pressed="${tipo === t}"><i></i>${TIPI[t][0]} <b>${n}</b></button>`).join('')}</div>
     <ul class="posta">${mostrati.map(riga).join('')}</ul>
     ${scelti.length > 8 ? `<button class="piu tasto" type="button" data-tutti="${vista.tutti ? '' : '1'}">${vista.tutti ? T.flussi.showLast8 : T.flussi.showAll(scelti.length)}</button>` : ''}` : `<p class="niente">${q.fonti.cli.ok ? T.flussi.noMessages : T.flussi.cliSilent}</p>`}
-    <p class="nota">${T.flussi.note}</p>`
+    ${comeSiLegge(T.flussi.note)}`
 }
 
 // ---------- Ufficio ----------
 const PESO = { 'aspetta te': 0, errore: 1, 'al lavoro': 2, finito: 3, fermo: 4 }
 /** La scheda di un agente: foto profilo, chi è e cosa fa, poi le statistiche. Chi è fermo l'ha più stretta. */
-function scrivania(a, ora, n = 0, fotoBot = new Map(), spento = false) {
+function scrivania(a, ora, n = 0, fotoBot = new Map(), q = null) {
   const k = chiave(a.stato)
   const secondi = a.daSecondi ?? (a.da ? (ora - a.da) / 1000 : null)
-  const da = secondi === null ? dici(a.stato) : a.stato === 'al lavoro' ? T.ufficio.workingFor(durata(secondi)) : a.stato === 'aspetta te' ? T.ufficio.waitingFor(durata(secondi)) : T.ufficio.idleFor(durata(secondi))
+  const da = (secondi === null ? dici(a.stato) : a.stato === 'al lavoro' ? T.ufficio.workingFor(durata(secondi)) : a.stato === 'aspetta te' ? T.ufficio.waitingFor(durata(secondi)) : T.ufficio.idleFor(durata(secondi))) + (a.statoVecchio ? ` · ${T.fermo.notUpdated}` : '')
   const viva = k === 'lavoro' || k === 'aspetta' || k === 'errore'
-  const tipo = a.bot ? T.bot.tag : a.agente || T.ufficio.agent
+  // Il fornitore lo dice il segno nel cartellino; la parola resta solo per chi non si riconosce.
+  const tipo = a.bot ? T.bot.tag : fornitoreDi(a) === 'altri' ? a.agente || T.ufficio.agent : T.ufficio.agent
   const altro = [a.scheda && a.scheda !== a.nome ? T.ufficio.tab(a.scheda) : '', a.inSfondo ? T.ufficio.inBackground : '', !a.inOrca && !a.bot ? T.ufficio.outsideOrca : ''].filter(Boolean)
   const fa = a.stato === 'aspetta te' && a.domanda ? a.domanda : a.dettaglio
-  return `<li><button type="button" class="scrivania carta c-${k} ${k}${viva ? ' viva' : ' ferma'}"${apri({ percorso: a.cartella, terminale: a.terminale })}>
+  return `<li><button type="button" class="scrivania carta c-${k} ${k}${viva ? ' viva' : ' ferma'}${a.statoVecchio ? ' stato-vecchio' : ''}"${apri({ percorso: a.cartella, terminale: a.terminale })}>
     <span class="tag">${nn(n)} ${e(tipo)}${a.ruolo ? ` · ${e(a.ruolo)}` : ''}</span>
-    <span class="chi">${ritratto({ nome: a.nome, bot: a.bot, ...fotoBot.get(a.nome.toLowerCase()), cart: a.bot ? T.bot.tag : a.agente.split(' ')[0].toLowerCase() })}
+    <span class="chi">${ritratto({ nome: a.nome, bot: a.bot, ...fotoBot.get(a.nome.toLowerCase()), ...cartDi(a) })}
       <span class="nome taglia">${e(a.nome)}</span>
       <span class="s taglia">${segno(k)} <span class="da">${e(da)}</span></span>
       ${fa ? `<span class="fa">${e(fa)}</span>` : ''}</span>
-    ${spento ? '' : statistiche(a, ora)}
+    ${q && q.fonti.motore.spento ? '' : statistiche(a, ora)}
     ${altro.length ? `<span class="meta">${altro.map((t) => `<span>${e(t)}</span>`).join('')}</span>` : ''}
   </button></li>`
 }
 
+/**
+ * L'Office. Di solito è la mappa dall'alto (una stanza per progetto, un avatar per agente); con
+ * `vista.lista` torna l'elenco di schede di prima, con tutte le statistiche. I filtri per stato e per
+ * fornitore valgono per tutte e due. `vista.scelto`: l'agente di cui è aperta la scheda sotto la mappa.
+ */
 export function ufficio(q, ora, vista = {}) {
   const filtro = vista.stato || ''
   // Dal tabellone si arriva anche filtrati per fornitore (Claude, OpenAI, Grok…).
@@ -1075,11 +1163,157 @@ export function ufficio(q, ora, vista = {}) {
   const fotoBot = new Map(q.bot.map((b) => [b.nome.toLowerCase(), { ico: chiaveIcona(b), foto: b.foto, sua: suaDi(b), emoji: b.emoji ?? null }]))
   const nota = q.fonti.motore.spento
     ? T.ufficio.notes.cliOff[q.fonti.ufficioDa] || ''
-    : T.ufficio.notes.full[q.fonti.ufficioDa]
-  return `<div class="filtri legenda"><button type="button" data-filtro-stato="" aria-pressed="${!filtro}"><i></i>${T.coda.all} <b>${tutti.length}</b></button>${fornitore ? `<button type="button" class="c-menta" data-vista="ufficio" data-stato="${e(filtro)}" data-fornitore="" aria-pressed="true" title="${T.ufficio.clearProvider}"><i></i>${T.ufficio.onlyProvider(nomeFornitore)}</button>` : ''}${stati.map((s) => `<button type="button" class="c-${chiave(s)}" data-filtro-stato="${s}" aria-pressed="${filtro === s}"><i></i>${dici(s)} <b>${conta(s)}</b></button>`).join('')}</div>
-    <div class="uffici">${piene.map((p, i) => `<fieldset class="stanza"><legend><span class="t">${nn(i)} ${e(p.nome)}</span> <span>${plurale(p.tutti, ...T.n.agent)}, ${plurale(p.schede.length, ...T.n.tab)}</span></legend><ul class="scrivanie">${p.agenti.map((a, j) => scrivania(a, ora, j, fotoBot, q.fonti.motore.spento)).join('')}</ul></fieldset>`).join('') || `<p class="niente">${T.ufficio.noAgents}</p>`}</div>
-    ${vuote.length ? `<h2>${T.ufficio.emptyRooms} <small class="num">${vuote.length}</small></h2><div class="vuote">${vuote.map((p) => `<span class="etichetta">${e(p.nome)} · ${plurale(p.schede.length, ...T.n.tab)}</span>`).join('')}</div>` : ''}
-    <p class="nota">${nota} ${T.ufficio.clickDesk}</p>`
+    : q.fonti.ufficioDa === 'cli' && q.fonti.motore.ultimi ? T.ufficio.notes.cliWithLast : T.ufficio.notes.full[q.fonti.ufficioDa]
+  const filtri = `<div class="filtri legenda"><button type="button" data-filtro-stato="" aria-pressed="${!filtro}"><i></i>${T.coda.all} <b>${tutti.length}</b></button>${fornitore ? `<button type="button" class="c-menta" data-vista="ufficio" data-stato="${e(filtro)}" data-fornitore="" aria-pressed="true" aria-label="${e(T.ufficio.onlyAria(nomeFornitore))}">${marchio(fornitore)}${T.ufficio.only}</button>` : ''}${stati.map((s) => `<button type="button" class="c-${chiave(s)}" data-filtro-stato="${s}" aria-pressed="${filtro === s}"><i></i>${dici(s)} <b>${conta(s)}</b></button>`).join('')}</div>`
+  const modo = `<div class="modo-ufficio" role="group" aria-label="${T.ufficio.howToShow}"><button type="button" data-ufficio-lista="" data-k="modo:mappa" aria-pressed="${!vista.lista}">${T.ufficio.map}</button><button type="button" data-ufficio-lista="1" data-k="modo:lista" aria-pressed="${Boolean(vista.lista)}">${T.ufficio.list}</button></div>`
+  const vuoteHtml = `${vuote.length ? `<h2>${T.ufficio.emptyRooms} <small class="num">${vuote.length}</small></h2><div class="vuote">${vuote.map((p) => `<span class="etichetta">${e(p.nome)} · ${plurale(p.schede.length, ...T.n.tab)}</span>`).join('')}</div>` : ''}`
+  if (vista.lista) {
+    return `${filtri}${modo}
+    <div class="uffici">${piene.map((p, i) => `<fieldset class="stanza"><legend><span class="t">${nn(i)} ${e(p.nome)}</span> <span>${plurale(p.tutti, ...T.n.agent)}, ${plurale(p.schede.length, ...T.n.tab)}</span></legend><ul class="scrivanie">${p.agenti.map((a, j) => scrivania(a, ora, j, fotoBot, q)).join('')}</ul></fieldset>`).join('') || `<p class="niente">${T.ufficio.noAgents}</p>`}</div>
+    ${vuoteHtml}
+    ${comeSiLegge(`${nota} ${T.ufficio.clickDesk}`)}`
+  }
+  const stanze = piene.map((p) => ({ nome: p.nome, schede: p.schede.length, agenti: p.agenti.map((a) => ({ ...a, chiave: chiaveAgente(a, p.nome) })) })).sort((x, y) => x.nome.localeCompare(y.nome))
+  // Chi è appena uscito resta un attimo nella sua stanza, per andarsene con la sua animazione.
+  for (const u of vista.partiti || []) {
+    const stanza = stanze.find((x) => x.nome === u.progetto)
+    if (stanza && !stanza.agenti.some((a) => a.chiave === u.chiave)) stanza.agenti.push({ ...u, esce: true })
+  }
+  if (!stanze.length) return `${filtri}${modo}<p class="niente">${T.ufficio.noAgents}</p>${vuoteHtml}`
+  const scelto = vista.scelto ? stanze.flatMap((x) => x.agenti.map((a) => ({ a, stanza: x.nome }))).find((x) => x.a.chiave === vista.scelto && !x.a.esce) : null
+  const dati = { q, ora, fotoBot, entrati: vista.entrati || [], scelto: scelto ? scelto.a.chiave : '' }
+  return `${filtri}${modo}
+    <figure class="mappa">${mappa(stanze, false, dati)}${mappa(stanze, true, dati)}</figure>
+    <div class="legenda mappa-legenda">
+      <span class="c-lavoro"><i class="pip-l"></i>${T.ufficio.legend.working}</span>
+      <span class="c-aspetta"><i class="pip-l"></i>${T.ufficio.legend.waiting}</span>
+      <span class="c-errore"><i class="pip-l"></i>${T.ufficio.legend.error}</span>
+      <span class="c-quieto"><i class="pip-l vuoto"></i>${T.ufficio.legend.couch}</span>
+      <span class="c-lavoro"><i class="pip-l tondo"></i>${T.diagramma.legend.subAgent}</span>
+      <span class="c-lavoro"><i class="filo spesso"></i>${T.ufficio.legend.messages}</span>
+    </div>
+    ${scelto ? schedaAgente(scelto.a, scelto.stanza, dati) : `<p class="come muto">${T.ufficio.clickAvatar}</p>`}
+    ${vuoteHtml}
+    ${comeSiLegge(`${T.ufficio.mapHelp} ${nota}`)}`
+}
+
+// ---------- Office: la mappa dall'alto ----------
+// Disegno originale, a mano, nello stile del pannello: stanze a bordo sottile col cartellino, pavimento a
+// puntini, scrivanie e divano fatti di rettangoli. Tutto SVG, in due tagli come il diagramma.
+/** Chi è un agente da un quadro all'altro: il suo terminale, oppure stanza, nome e cartella. */
+export const chiaveAgente = (a, progetto) => a.terminale || `${progetto}/${a.nome}/${a.cartella || ''}`
+const SVEGLIO = (a) => a.stato === 'al lavoro' || a.stato === 'aspetta te' || a.stato === 'errore'
+const POSTO = { w: 50, h: 58, lato: 26 }, DIVANO = { w: 21, lato: 17 }
+
+/**
+ * Dove sta ogni cosa: le stanze in colonne (due nel pannello stretto, quattro in quello largo), ognuna
+ * nella colonna più corta; dentro, in alto le scrivanie di chi è sveglio (lavora, aspetta, è in errore) e
+ * in basso il divano di chi è fermo o ha finito. Funzione pura: serve anche alle prove.
+ */
+export function pianta(stanze, largo) {
+  const W = largo ? 900 : 340, colonne = largo ? 4 : 2, spazio = 8
+  const w = (W - spazio * (colonne + 1)) / colonne
+  const perRiga = Math.max(1, Math.floor((w - 10) / POSTO.w)), perDivano = Math.max(1, Math.floor((w - 10) / DIVANO.w))
+  const alte = Array.from({ length: colonne }, () => spazio)
+  const messe = stanze.map((st) => {
+    const svegli = st.agenti.filter(SVEGLIO), quieti = st.agenti.filter((a) => !SVEGLIO(a))
+    const righe = Math.ceil(svegli.length / perRiga), sedute = Math.ceil(quieti.length / perDivano)
+    const h = 22 + righe * POSTO.h + (righe && sedute ? 7 : 0) + sedute * DIVANO.w + 8
+    const c = alte.indexOf(Math.min(...alte))
+    const x = spazio + c * (w + spazio), y = alte[c]
+    alte[c] += h + spazio
+    const yDivano = y + 22 + righe * POSTO.h + (righe && sedute ? 7 : 0)
+    const posti = [
+      ...svegli.map((a, i) => ({ a, seduto: true, lato: POSTO.lato, sx: x + 5 + (i % perRiga) * POSTO.w, sy: y + 22 + Math.floor(i / perRiga) * POSTO.h })).map((p) => ({ ...p, x: p.sx + (POSTO.w - POSTO.lato) / 2, y: p.sy + 16 })),
+      ...quieti.map((a, i) => ({ a, seduto: false, lato: DIVANO.lato, sx: x + 5 + (i % perDivano) * DIVANO.w, sy: yDivano + Math.floor(i / perDivano) * DIVANO.w })).map((p) => ({ ...p, x: p.sx + 2, y: p.sy + 2 }))
+    ]
+    return { nome: st.nome, schede: st.schede, x, y, w, h, yDivano: sedute ? yDivano : null, righeDivano: sedute, posti }
+  })
+  return { W, H: Math.max(...alte), stanze: messe }
+}
+
+/** Un avatar: la foto di Orca (o il volto dal nome) in un riquadro con l'anello del colore di stato. */
+function avatar(p, stanza, id, dati) {
+  const { a, x, y, lato: s } = p
+  const k = chiave(a.stato), viva = SVEGLIO(a)
+  const f = a.bot ? dati.fotoBot.get(a.nome.toLowerCase()) : null
+  const faccia = a.bot
+    ? ritrattoSvg(f ? f.ico : a.nome, f ? f.foto : null, x, y, s, id, f ? f.sua : null, f ? f.emoji : null)
+    : `<svg class="volto" x="${x}" y="${y}" width="${s}" height="${s}" viewBox="-3 -3 34 34" aria-hidden="true">${voltoDalNome(a.nome)}</svg>`
+  const cx = x + s / 2
+  // Chi lavora ha la scrivania davanti: il piano, lo schermo e tre tasti che battono.
+  const tavolo = p.seduto ? `<rect class="tavolo" x="${cx - 17}" y="${y - 13}" width="34" height="9"/><rect class="schermo" x="${cx - 7}" y="${y - 14.5}" width="14" height="3"/>${k === 'lavoro' ? [0, 1, 2].map((i) => `<rect class="batte b${i}" x="${cx - 6 + i * 5}" y="${y - 8.5}" width="2.5" height="2.5"/>`).join('') : ''}` : ''
+  const nuvola = k === 'aspetta' || k === 'errore' ? `<g class="nuvola"><rect x="${x + s - 5}" y="${y - 9}" width="12" height="12"/><text x="${x + s + 1}" y="${y + 0.6}" text-anchor="middle">${k === 'aspetta' ? '?' : '!'}</text></g>` : ''
+  const sub = a.subAttivi ? `<g class="subs${a.vecchio !== undefined ? ' vecchi' : ''}">${Array.from({ length: Math.min(a.subAttivi, 3) }, (_, i) => `<circle cx="${x - 5}" cy="${y + 4 + i * 8}" r="2.8"/>`).join('')}${a.subAttivi > 3 ? `<text x="${x - 5}" y="${y + 33}" text-anchor="middle">+${a.subAttivi - 3}</text>` : ''}</g>` : ''
+  const nome = p.seduto ? `<text class="chi" x="${cx}" y="${y + s + 10}" text-anchor="middle">${e(tronca(a.nome, 9))}</text>` : ''
+  const secondi = a.daSecondi ?? (a.da ? (dati.ora - a.da) / 1000 : null)
+  const tipo = a.bot ? T.bot.tag : a.agente || T.ufficio.agent
+  const dice = [`${a.nome} · ${tipo}`, a.esce ? T.figlio.gone : `${dici(a.stato)}${secondi === null ? '' : T.tempo.forDur(durata(secondi))}`, a.stato === 'aspetta te' && a.domanda ? a.domanda : a.dettaglio, a.subAttivi ? (a.vecchio !== undefined ? T.fermo.subsThen(plurale(a.subAttivi, ...T.n.subAgent)) : plurale(a.subAttivi, ...T.n.subAgentWorking)) : '', a.vecchio !== undefined && !a.esce ? T.fermo.avatar(Boolean(a.statoVecchio), oraDi(a.vecchio)) : '', a.esce ? '' : T.hover.itsCard]
+  const mossa = a.esce ? ' esce' : dati.entrati.includes(a.chiave) ? ' entra' : ''
+  const presa = `<rect class="presa" x="${x - 3}" y="${y - (p.seduto ? 15 : 2)}" width="${s + 6}" height="${s + (p.seduto ? 28 : 4)}"/>`
+  return `<g class="avatar c-${k}${viva ? ' viva' : ' quieta'}${a.statoVecchio ? ' stato-vecchio' : ''}${mossa}${dati.scelto === a.chiave ? ' scelto' : ''}"${a.esce ? ' aria-hidden="true"' : ` data-scegli="${e(a.chiave)}"${premibile('av:' + a.chiave, T.ufficio.avatarAria(a.nome, tipo, dici(a.stato), stanza.nome))}`}${info(dice)}>${tavolo}<rect class="sfondo" x="${x}" y="${y}" width="${s}" height="${s}"/>${faccia}<rect class="anello" x="${x}" y="${y}" width="${s}" height="${s}"/>${nuvola}${sub}${nome}${presa}</g>`
+}
+
+/**
+ * La mappa in uno dei due tagli. Sotto, le stanze: muri, cartellino, porta in basso, pavimento, divano.
+ * In mezzo, gli impulsi dei messaggi: una luce che corre tra un bot e gli agenti con cui parla (il bot che tiene la coda e un
+ * bot che si sono scritti negli ultimi 15 minuti, un bot e un suo worker al lavoro). Sopra, gli avatar.
+ */
+function mappa(stanze, largo, dati) {
+  const id = largo ? 'ml' : 'ms'
+  const pi = pianta(stanze, largo)
+  const dove = new Map(), deiBot = new Map()
+  for (const st of pi.stanze) {
+    for (const p of st.posti) {
+      if (p.a.esce) continue
+      const centro = [Math.round((p.x + p.lato / 2) * 10) / 10, Math.round((p.y + p.lato / 2) * 10) / 10]
+      dove.set(p.a.chiave, centro)
+      if (p.a.bot && !deiBot.has(p.a.nome.toLowerCase())) deiBot.set(p.a.nome.toLowerCase(), centro)
+    }
+  }
+  const f = flusso(dati.q, dati.ora)
+  const fili = []
+  const capo = f.diTutti ? null : deiBot.get(String(f.lead).toLowerCase())
+  for (const b of f.bot) {
+    const suo = deiBot.get(b.nome.toLowerCase())
+    if (capo && suo && b.vivo) fili.push([capo, suo, 'vivo', `${f.lead} ↔ ${b.nome}`, T.ufficio.msgActive(plurale(b.msg, ...T.n.message))])
+  }
+  for (const b of dati.q.bot) {
+    const suo = deiBot.get(b.nome.toLowerCase())
+    for (const figlio of b.figli || []) {
+      const lui = figlio.apri && figlio.apri.terminale ? dove.get(figlio.apri.terminale) : null
+      if (suo && lui && (figlio.stato === 'lavoro' || figlio.stato === 'aspetta')) fili.push([suo, lui, figlio.stato === 'aspetta' ? 'aspetta' : 'vivo', `${b.nome} → ${figlio.nome}`, `${TIPO_FIGLIO[figlio.tipo] || T.ufficio.agent} ${STATO_FIGLIO[figlio.stato]}`])
+    }
+  }
+  const impulsi = fili.map(([da, a, tono, chi, cosa]) => {
+    const d = `M${da[0]} ${da[1]} L${a[0]} ${a[1]}`
+    return `<g class="impulso ${tono}"${info(chi, cosa)} aria-hidden="true"><path class="scia" d="${d}"/><path class="luce-m" d="${d}" pathLength="100"/></g>`
+  }).join('')
+  const stanza = (st, n) => {
+    const porta = st.x + st.w / 2
+    const divano = st.yDivano === null ? '' : `<rect class="divano" x="${st.x + 3}" y="${st.yDivano - 1}" width="${st.w - 6}" height="${st.righeDivano * DIVANO.w + 3}"/>`
+    return `<g class="stanza-m${st.posti.some((p) => SVEGLIO(p.a)) ? ' viva' : ''}" data-stanza="${e(st.nome)}"><rect class="muro" x="${st.x}" y="${st.y}" width="${st.w}" height="${st.h}"/><rect class="pavimento" x="${st.x + 1}" y="${st.y + 1}" width="${st.w - 2}" height="${st.h - 2}" fill="url(#pav-${id})"/><path class="porta" d="M${porta - 9} ${st.y + st.h} H${porta + 9}"/>${divano}<text class="nome-stanza" x="${st.x + 6}" y="${st.y + 13}">${e(tronca(`${nn(n)} ${st.nome}`, Math.floor((st.w - 30) / 6.9)))}</text><text class="conta-stanza" x="${st.x + st.w - 6}" y="${st.y + 13}" text-anchor="end">${st.posti.filter((p) => !p.a.esce).length}</text></g>`
+  }
+  const tutti = pi.stanze.flatMap((st) => st.posti.map((p) => avatar(p, st, id, dati)))
+  const quanti = pi.stanze.reduce((n, st) => n + st.posti.filter((p) => !p.a.esce).length, 0)
+  return `<svg class="${largo ? 'largo' : 'stretto'}" viewBox="0 0 ${pi.W} ${pi.H}" role="group" aria-label="${e(T.ufficio.mapAria(plurale(pi.stanze.length, ...T.n.room), plurale(quanti, ...T.n.agent)))}"><defs>${bicromia(id)}<pattern id="pav-${id}" width="8" height="8" patternUnits="userSpaceOnUse"><rect class="punto-p" x="3.5" y="3.5" width="1" height="1"/></pattern></defs>${pi.stanze.map(stanza).join('')}${impulsi}${tutti.join('')}</svg>`
+}
+
+/** La scheda dell'avatar scelto: chi è, cosa sta facendo, le sue statistiche, e il tasto per andare da lui. */
+function schedaAgente(a, stanza, dati) {
+  const k = chiave(a.stato)
+  const bot = a.bot ? dati.q.bot.find((b) => b.nome.toLowerCase() === a.nome.toLowerCase()) : null
+  const bersaglio = (bot && chatDi(bot)) || { percorso: a.cartella, terminale: a.terminale }
+  const secondi = a.daSecondi ?? (a.da ? (dati.ora - a.da) / 1000 : null)
+  const fa = a.stato === 'aspetta te' && a.domanda ? a.domanda : a.dettaglio
+  const tipo = a.bot ? T.bot.tag : fornitoreDi(a) === 'altri' ? a.agente || T.ufficio.agent : T.ufficio.agent
+  const figli = bot && (bot.figli || []).length ? `<p class="muto">${T.hover.startedAgents(plurale(bot.figli.length, ...T.n.agent), contaFigli(bot.figli).parole)}</p>` : ''
+  const altro = [a.scheda && a.scheda !== a.nome ? T.ufficio.tab(a.scheda) : '', a.inSfondo ? T.ufficio.inBackground : '', !a.inOrca && !a.bot ? T.ufficio.outsideOrca : ''].filter(Boolean)
+  const va = bersaglio.percorso || bersaglio.terminale ? `<button type="button" class="tasto"${azApri(bersaglio)}>${a.bot ? T.ufficio.openChat : a.terminale ? T.ufficio.openTerminal : T.ufficio.openInOrca} ›</button>` : `<span class="muto">${T.ufficio.noTab}</span>`
+  return `<aside class="scheda-agente box c-${k}${SVEGLIO(a) ? ' acceso' : ''}" id="scheda-agente" aria-label="${e(a.nome)}"><span class="tag">${e(tipo)} · ${e(stanza)}</span><button type="button" class="chiudi" data-scegli="" data-k="scheda:chiudi" aria-label="${T.ufficio.closeCard}" title="${T.ufficio.close}">✕</button>
+    <div class="chi">${ritratto({ nome: a.nome, bot: a.bot, ...dati.fotoBot.get(a.nome.toLowerCase()), ...cartDi(a) })}<div><div class="nome taglia">${e(a.nome)}</div><div class="s c-${k}">${segno(k)} ${e(dici(a.stato))}${secondi === null ? '' : T.tempo.forDur(durata(secondi))}${a.statoVecchio ? ` · ${T.fermo.notUpdated}` : ''}</div>${fa ? `<div class="fa">${e(fa)}</div>` : `<div class="fa muto">${T.ufficio.nothingToReport}</div>`}</div></div>
+    ${statistiche(a, dati.ora)}${figli}${altro.length ? `<p class="meta">${altro.map((t) => `<span>${e(t)}</span>`).join('')}</p>` : ''}
+    <p class="azioni">${va}</p></aside>`
 }
 
 // ---------- Incroci ----------
@@ -1100,5 +1334,5 @@ export function incroci(q) {
     ${condivise.map(zona).join('') || `<p class="niente">${T.incroci.noShared}</p>`}
     <h2>${T.incroci.single} <small>${T.incroci.singleHint}</small></h2>
     ${soli.map(zona).join('') || `<p class="niente">${T.incroci.noOther}</p>`}
-    <p class="nota">${T.incroci.rule}</p>`
+    ${comeSiLegge(T.incroci.rule)}`
 }

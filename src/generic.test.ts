@@ -2,9 +2,9 @@
 // configured. These tests are about the generic parts: who holds the queue, how titles are read, the
 // optional state file, the settings, and what the worker reads and launches.
 import { afterEach, assert, mockHost, mountWorker, test } from 'orca/testing'
-import { BOTS, HOME, demoCli, demoHomes } from '../demo/demo.mjs'
+import { BOTS, HOME, demoCli, demoHomes, demoState } from '../demo/demo.mjs'
 import { COMANDI, leggiMascotta, type Dipendenze } from './fonti'
-import { componi, componiCoda, leggiTitolo, normaCli, orchestratoreTra, ordinaProgetti, testoAvviso, voceBarra } from './norma'
+import { componi, componiCoda, leggiTitolo, normaCli, normaMotore, orchestratoreTra, ordinaProgetti, testoAvviso, voceBarra } from './norma'
 import { impostazioniDa, NEUTRE, NOME, type Opzioni } from './opzioni'
 import { avvia, deactivate } from './worker'
 
@@ -282,6 +282,104 @@ test('a bot\'s mascot is read from the Orca app on this machine, and only a plai
 
 // ---------- the panel never trusts a text it shows ----------
 
+// ---------- the optional state file, when it stops being written ----------
+
+const MIN = 60_000
+/** The picture with a state file set, last written `age` milliseconds ago. */
+const conStato = (age: number, altro: Record<string, unknown> = {}) => {
+  const p = parte()
+  return quadro({}, { motore: { parte: normaMotore(demoState(NOW, age), p.bot, HOME), errore: null }, motoreSpento: false, ...altro })
+}
+const tutteLeViste = async (q: any, ora = NOW): Promise<string> => {
+  const V = await import('../panel/viste.js')
+  return [V.fonti(q, ora), V.piede(q), V.tabellone(q, { aperto: 'lavoro' }), V.panoramica(q, ora, {}), V.coda(q, ora, {}), V.flussi(q, ora, {}), V.ufficio(q, ora, {}), V.ufficio(q, ora, { lista: true }), V.incroci(q)].join('\n')
+}
+const ALLARMI = ['State file stopped', 'state file stopped', 'not updated', 'motore-fermo', 'non-agg', 'stato-vecchio', 'vecchia', 'Engine']
+
+test('no state file set: nothing ever says that one stopped, in the panel or in the status bar', async () => {
+  const V = await import('../panel/viste.js')
+  const senzaCli = { cli: { parte: null, quando: null, errore: 'orca is not answering' } }
+  // The default setup, then with a queue holder, then with the Orca CLI down, then hours later.
+  for (const [nome, q, ora] of [['default', quadro(), NOW], ['queue holder', quadro({ codaBot: 'Atlas' }), NOW], ['CLI down', quadro({}, senzaCli), NOW], ['hours later', quadro(), NOW + 300 * MIN]] as const) {
+    assert.equal(q.fonti.motore.spento, true, nome)
+    assert.equal(q.fonti.motore.ultimi, undefined, nome)
+    assert.equal(V.motoreFermo(q, ora), '', nome)
+    const html = await tutteLeViste(q, ora)
+    const barra = voceBarra(q)
+    for (const allarme of ALLARMI) assert.equal(html.includes(allarme) || barra.text.includes(allarme) || barra.tooltip.includes(allarme), false, `${nome}: ${allarme}`)
+    assert.equal(q.progetti.flatMap((p) => p.agenti).some((a) => a.vecchio !== undefined || a.statoVecchio), false, nome)
+  }
+  // With everything answering the header is silent, and the status bar is not red.
+  assert.equal(V.fonti(quadro(), NOW), '')
+  assert.notEqual(voceBarra(quadro()).tone, 'danger')
+  assert.equal(voceBarra(quadro({}, senzaCli)).tooltip, 'The Orca CLI is not answering: the data may be stale.')
+})
+
+test('a state file that is set and fresh: its data shows, and nothing is marked', async () => {
+  const q = conStato(2000)
+  assert.deepEqual([q.fonti.motore.spento, q.fonti.motore.ok, q.fonti.motore.ultimi, q.fonti.ufficioDa], [false, true, undefined, 'motore'])
+  const html = await tutteLeViste(q)
+  for (const allarme of ALLARMI) assert.equal(html.includes(allarme) || voceBarra(q).text.includes(allarme), false, allarme)
+  assert.ok(html.includes('<b class="num">41%</b>') && html.includes('opus-5-5'))
+  // One minute is still fresh; a second more is not.
+  assert.equal(conStato(MIN).fonti.motore.ok, true)
+  assert.equal(conStato(MIN + 1000).fonti.motore.ok, false)
+})
+
+test('a state file that is set and stopped: a red band and a red status bar say so, and its last data stays, marked', async () => {
+  const V = await import('../panel/viste.js')
+  const q = conStato(12 * MIN)
+  assert.deepEqual([q.fonti.motore.spento, q.fonti.motore.ok, q.fonti.motore.ultimi, q.fonti.ufficioDa], [false, false, true, 'cli'])
+  const ora = V.oraDi(NOW - 12 * MIN)
+  const fascia = V.motoreFermo(q, NOW)
+  for (const pezzo of ['<div class="motore-fermo">', '<b>State file stopped</b>', `for 12 min · last data ${ora}`, 'marked “not updated”', 'States come from the Orca CLI', '“State file” setting']) assert.ok(fascia.includes(pezzo), pezzo)
+  // The band is in the header, so it is on top of every view.
+  assert.ok(V.fonti(q, NOW).startsWith(fascia))
+  // States are the fresh ones of the CLI; model, context and sub-agents are the last ones, with their time.
+  const agenti = q.progetti.flatMap((p) => p.agenti)
+  const rate = agenti.find((a) => a.terminale === 'term_demo_rate')!
+  assert.deepEqual([rate.stato, rate.modello, rate.contestoPct, rate.subAttivi, rate.vecchio, rate.statoVecchio], ['al lavoro', 'opus-5-5', 41, 2, NOW - 12 * MIN, undefined])
+  // An agent the state file never knew has no such mark: its data is simply missing.
+  assert.equal(agenti.find((a) => a.terminale === 'term_demo_sync')!.vecchio, undefined)
+  const lista = V.ufficio(q, NOW, { lista: true })
+  assert.equal((lista.match(/<span class="stat vecchia">/g) ?? []).length, 3)
+  assert.ok(lista.includes(`not updated since ${ora}</span>`) && lista.includes('<b class="num">41%</b>'))
+  // Overlaps are from then: they are not shown as if they held now.
+  assert.deepEqual([q.fonti.incrociDisponibili, q.incroci.length], [false, 0])
+  // The status bar: red, whatever is in the queue, inside the 256 characters Orca accepts.
+  const barra = voceBarra(q)
+  assert.deepEqual([barra.text.startsWith(`${NOME} · state file stopped`), barra.tone], [true, 'danger'])
+  assert.ok(barra.tooltip.startsWith(`State file stopped since ${ora}: sub-agents, context and overlaps are not updated.`))
+  assert.ok(barra.tooltip.length <= 256)
+  // Set, but the file cannot be read at all: the band says so, with no time and nothing marked.
+  const mai = quadro({}, { motore: { parte: null, errore: 'ENOENT' }, motoreSpento: false })
+  const senza = V.motoreFermo(mai, NOW)
+  assert.ok(senza.includes('it cannot be read') && senza.includes('are missing'))
+  for (const brutto of ['undefined', 'NaN', 'null', 'style=']) assert.equal(fascia.includes(brutto) || senza.includes(brutto), false, brutto)
+})
+
+test('worker: the stopped state file reaches the status bar only when a state file is set', async () => {
+  const stato = HOME + '/notes/state.json'
+  const vecchio = JSON.stringify(demoState(NOW, 12 * MIN))
+  // Set: the worker says it, in red.
+  const con = finte({ [stato]: vecchio })
+  const a = await monta(con, { stateFile: '~/notes/state.json' })
+  const q = await a.worker.request('regia.aggiorna')
+  assert.deepEqual([q.fonti.motore.spento, q.fonti.motore.ok, q.fonti.motore.ultimi], [false, false, true])
+  const voce = a.host.callsOf('statusBar.update').at(-1) as { text: string; tone: string }
+  assert.deepEqual([voce.text.includes('state file stopped'), voce.tone], [true, 'danger'])
+  await a.worker.deactivate()
+  // Not set: the same file is on disk and is never read, and nothing is said.
+  const senza = finte({ [stato]: vecchio })
+  const b = await monta(senza)
+  const p = await b.worker.request('regia.aggiorna')
+  assert.deepEqual([p.fonti.motore.spento, p.fonti.motore.ultimi], [true, undefined])
+  assert.equal(senza.letti.includes(stato), false)
+  for (const c of b.host.callsOf('statusBar.update') as { text: string; tooltip?: string; tone: string }[]) {
+    assert.equal(c.text.includes('stopped') || String(c.tooltip ?? '').includes('stopped') || c.tone === 'danger', false, c.text)
+  }
+})
+
 test('hostile text in any field of the picture comes out escaped in every view', async () => {
   const V = await import('../panel/viste.js')
   const veleno = '"><img src=x onerror=alert(1)><script>alert(2)</script>\'`'
@@ -293,10 +391,10 @@ test('hostile text in any field of the picture comes out escaped in every view',
     if (x && typeof x === 'object') return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, avvelena(v, k)]))
     return x
   }
-  for (const base of [quadro(), quadro({ codaBot: 'Atlas' }), quadro({ codaBot: 'Nobody' })]) {
+  for (const base of [quadro(), quadro({ codaBot: 'Atlas' }), quadro({ codaBot: 'Nobody' }), conStato(12 * MIN)]) {
     const q = avvelena(base) as any
     // The lanes are keyed by project name: keep the keys consistent after poisoning.
-    const html = [V.fonti(q, NOW), V.piede(q), V.tabellone(q, {}), V.panoramica(q, NOW, {}), V.coda(q, NOW, { aperte: q.coda.voci.map((v: any) => v.uid) }), V.flussi(q, NOW, { tutti: true }), V.ufficio(q, NOW, {}), V.incroci(q), JSON.stringify(V.schede(q))].join('\n')
+    const html = [V.fonti(q, NOW), V.piede(q), V.tabellone(q, {}), V.tabellone(q, { aperto: 'lavoro' }), V.panoramica(q, NOW, {}), V.coda(q, NOW, { aperte: q.coda.voci.map((v: any) => v.uid) }), V.flussi(q, NOW, { tutti: true }), V.ufficio(q, NOW, {}), V.ufficio(q, NOW, { lista: true }), V.ufficio(q, NOW, { scelto: 'term_demo_rate' }), V.incroci(q), JSON.stringify(V.schede(q))].join('\n')
     assert.ok(html.length > 5000)
     for (const vivo of ['<img src=x', '<script>alert', 'onerror=alert(1)>']) assert.equal(html.includes(vivo), false, vivo)
     // It is there, escaped: the test would mean nothing if the text were simply dropped.

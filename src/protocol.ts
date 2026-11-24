@@ -99,6 +99,8 @@ export type Figlio = {
   stato: 'lavoro' | 'aspetta' | 'finito' | 'errore' | 'fermo'
   /** Il tipo di agente in parole («Claude Code»). Vuoto: non si sa. */
   agente: string
+  /** Un sub-agente visto nell'ultimo file di stato, che ora è fermo: c'era allora, adesso non si sa. */
+  vecchio?: boolean
   da: number | null
   apri: Bersaglio | null
 }
@@ -135,6 +137,13 @@ export type Agente = {
   subAttivi: number
   /** Sub-agenti che hanno finito. Null: manca. */
   subConclusi: number | null
+  /**
+   * Il file di stato è fermo: modello, sforzo, contesto, cache e sub-agenti sono gli ultimi che portava, a
+   * quest'ora (ms). Restano a schermo, segnati come non aggiornati. Assente: i dati sono freschi.
+   */
+  vecchio?: number
+  /** Anche lo stato è l'ultimo del file di stato: nessun'altra fonte vede questo agente (non ha un terminale di Orca). */
+  statoVecchio?: boolean
 }
 
 export type Progetto = { nome: string; schede: string[]; agenti: Agente[] }
@@ -220,8 +229,12 @@ export type Coda = {
 
 export type Fonti = {
   cli: { ok: boolean; quando: number | null; errore: string | null }
-  /** `spento`: il file di stato facoltativo non è stato chiesto. Non è un guasto, e non si legge niente. */
-  motore: { ok: boolean; aggiornato: number | null; errore: string | null; spento: boolean }
+  /**
+   * `spento`: il file di stato facoltativo non è stato chiesto. Non è un guasto, e non si legge niente.
+   * `ok`: il file è stato aggiornato da meno di un minuto. `ultimi`: è fermo, e nel quadro ci sono i suoi
+   * ultimi dati, segnati come non aggiornati.
+   */
+  motore: { ok: boolean; aggiornato: number | null; errore: string | null; spento: boolean; ultimi?: boolean }
   ufficioDa: 'motore' | 'cli' | 'api' | 'niente'
   incrociDisponibili: boolean
 }
