@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process'
 import { watch } from 'node:fs'
 import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { win32 } from 'node:path'
 import { avatarDi, type CliGrezza, type FotoBot, type FotoSua } from './norma'
 
 /** Gli unici comandi che il plugin lancia. `{bot}` è l'id di un bot preso da `bot list`: il nome può cambiare e portare un'emoji, l'id no. */
@@ -72,13 +73,51 @@ export type Dipendenze = {
   osserva: (cartella: string, cambia: (nome: string | null) => void, guasto: () => void) => { chiudi: () => void }
 }
 
+/**
+ * L'ambiente per la CLI. Orca avvia il worker con un ambiente ridotto, e su Windows in quell'ambiente
+ * non ci sono APPDATA né LOCALAPPDATA: la CLI senza APPDATA non trova il runtime di Orca, e risponde
+ * `runtime_unavailable` a ogni comando. Qui si rimmettono, se mancano; tutto il resto resta com'è.
+ */
+export function envPerLaCli(
+  ambiente: Record<string, string | undefined> = process.env,
+  casa = homedir(),
+  sistema = process.platform
+): Record<string, string | undefined> {
+  const env = { ...ambiente }
+  if (sistema === 'win32') {
+    env.APPDATA ??= win32.join(casa, 'AppData', 'Roaming')
+    env.LOCALAPPDATA ??= win32.join(casa, 'AppData', 'Local')
+  }
+  return env
+}
+
+/**
+ * La CLI di Orca su Windows, se si trova. Serve il percorso intero: lanciata con un nome solo
+ * (`orca`), la CLI cerca il suo comando nella cartella in cui si trova, e il worker gira dentro la
+ * cartella dell'app: da lì il comando non c'è, e ogni chiamata muore con `MODULE_NOT_FOUND`.
+ */
+export function cliDiWindows(
+  sistema = process.platform,
+  risorse = (process as { resourcesPath?: string }).resourcesPath,
+  eseguibile = process.execPath,
+  casa = homedir()
+): string[] {
+  if (sistema !== 'win32') return []
+  const basi = [
+    risorse,
+    eseguibile ? win32.join(win32.dirname(eseguibile), 'resources') : '',
+    win32.join(casa, 'AppData', 'Local', 'Programs', 'orca', 'resources')
+  ]
+  return [...new Set(basi.filter((b): b is string => Boolean(b)).map((b) => win32.join(b, 'bin', 'orca.exe')))]
+}
+
 export function dipendenzeVere(): Dipendenze {
   return {
     casa: homedir(),
     adesso: () => Date.now(),
     lancia: (eseguibile, argomenti) =>
       new Promise((ok, no) => {
-        execFile(eseguibile, argomenti, { timeout: 10_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (errore, stdout) =>
+        execFile(eseguibile, argomenti, { env: envPerLaCli(), timeout: 10_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (errore, stdout) =>
           errore ? no(errore) : ok(String(stdout))
         )
       }),
@@ -161,7 +200,7 @@ export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno:
  * lascia il dato di prima.
  */
 export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: MemoriaCli, opzioni: { tutto?: boolean; prioritario?: string; tuttiGliItem?: boolean; quanti?: number } = {}): Promise<CliGrezza> {
-  const tutti = [...new Set([percorsoOrca.trim() && espandi(percorsoOrca.trim(), dip.casa), ORCA_APP, 'orca'].filter(Boolean))] as string[]
+  const tutti = [...new Set([percorsoOrca.trim() && espandi(percorsoOrca.trim(), dip.casa), ORCA_APP, ...cliDiWindows(), 'orca'].filter(Boolean))] as string[]
   // Il primo comando sceglie l'eseguibile buono: gli altri non riprovano quelli che mancano.
   const eseguibili = mem.buono && tutti.includes(mem.buono) ? [mem.buono, ...tutti.filter((e) => e !== mem.buono)] : tutti
   let bots: any[] = []

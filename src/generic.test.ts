@@ -3,7 +3,7 @@
 // optional state file, the settings, and what the worker reads and launches.
 import { afterEach, assert, mockHost, mountWorker, test } from 'orca/testing'
 import { BOTS, HOME, demoCli, demoHomes } from '../demo/demo.mjs'
-import { COMANDI, leggiMascotta, type Dipendenze } from './fonti'
+import { cliDiWindows, COMANDI, envPerLaCli, leggiMascotta, type Dipendenze } from './fonti'
 import { componi, componiCoda, leggiTitolo, normaCli, orchestratoreTra, ordinaProgetti, testoAvviso, voceBarra } from './norma'
 import { impostazioniDa, NEUTRE, NOME, type Opzioni } from './opzioni'
 import { avvia, deactivate } from './worker'
@@ -202,6 +202,33 @@ async function monta(f: Finte, settings: Record<string, unknown> = {}) {
   attivo = worker
   return { host, worker }
 }
+
+test('the CLI is launched with an environment that has APPDATA on Windows, where the worker has none', () => {
+  // Orca starts the worker with a reduced environment: on Windows there is no APPDATA, and the CLI
+  // cannot find the runtime of Orca without it, so every command comes back `runtime_unavailable`.
+  const win = envPerLaCli({ SystemRoot: 'C:\\Windows' }, 'C:\\Users\\pippo', 'win32')
+  assert.equal(win.APPDATA, 'C:\\Users\\pippo\\AppData\\Roaming')
+  assert.equal(win.LOCALAPPDATA, 'C:\\Users\\pippo\\AppData\\Local')
+  // What the worker already has is left as it is.
+  assert.equal(win.SystemRoot, 'C:\\Windows')
+  assert.equal(envPerLaCli({ APPDATA: 'D:\\altro' }, 'C:\\Users\\pippo', 'win32').APPDATA, 'D:\\altro')
+  // Anywhere else nothing changes.
+  assert.deepEqual(envPerLaCli({ PATH: '/usr/bin' }, '/home/pippo', 'linux'), { PATH: '/usr/bin' })
+})
+
+test('on Windows the CLI is looked for by its full path, because the worker runs inside the app folder', () => {
+  // Launched by name alone, the CLI looks for its command in the folder it sits in, and the worker
+  // runs inside the app folder: from there the command is not there, and every call dies.
+  const app = 'C:\\Users\\pippo\\AppData\\Local\\Programs\\orca'
+  const cli = `${app}\\resources\\bin\\orca.exe`
+  assert.deepEqual(cliDiWindows('win32', `${app}\\resources`, `${app}\\Orca.exe`, 'C:\\Users\\pippo'), [cli])
+  // Without `resourcesPath` the folder comes from the executable that is running.
+  assert.deepEqual(cliDiWindows('win32', '', `${app}\\Orca.exe`, 'C:\\Users\\pippo'), [cli])
+  // With neither, the default install folder is tried.
+  assert.deepEqual(cliDiWindows('win32', '', '', 'C:\\Users\\pippo'), [cli])
+  // Anywhere else nothing is added: the CLI is where `ORCA_APP` says.
+  assert.deepEqual(cliDiWindows('linux', '/opt/orca/resources', '/opt/orca/orca', '/home/pippo'), [])
+})
 
 test('worker, nothing configured: a full picture, no state file looked for, read-only commands only', async () => {
   const f = finte()
