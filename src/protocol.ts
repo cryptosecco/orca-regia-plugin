@@ -239,10 +239,56 @@ export type Fonti = {
   incrociDisponibili: boolean
 }
 
+/**
+ * Una prova nella sandbox degli audit (~/orca/sandbox): un agente sta eseguendo codice di terzi. Viene dal
+ * file di stato che `sandbox.sh` tiene in `attive/<id>.json` mentre la prova gira (formato: LEGGIMI.md della
+ * sandbox). Sola lettura. Un campo che nel file manca o è null qui è vuoto o null: non viene inventato.
+ */
+export type Prova = {
+  /** `<AAAAMMGG-hhmmss>-<nome>-<pid>`, uguale al nome del file. */
+  id: string
+  nome: string
+  /** `finita`: il file non c'è più. La prova resta qualche minuto nel quadro, per poterne aprire il registro. */
+  stato: 'avvio' | 'in_corso' | 'chiusura' | 'finita'
+  /** Il programma dell'agente che l'ha lanciata (`claude`, `codex`…). Vuoto: non si sa. */
+  agente: string
+  /** Il bot che l'ha lanciata (`--chi`, o la sua casa). Vuoto: non si sa. */
+  bot: string
+  /** Gli identificativi di Orca: legano la prova alla scheda dell'agente. */
+  terminale: string | null
+  worktree: string | null
+  workspace: string | null
+  scheda: string | null
+  cartella: string
+  comando: string
+  inizio: number | null
+  /** Falso: rete chiusa. Vero: aperta solo verso `dominio`. */
+  rete: boolean
+  dominio: string
+  tempoMax: number | null
+  cpuMax: number | null
+  memMaxMb: number | null
+  /** Tentativi bloccati finora (rete, file, servizi). */
+  bloccati: number
+  memoriaMb: number | null
+  processi: number | null
+  /** Secondi dall'inizio. Null all'avvio: il file non lo porta ancora. */
+  secondi: number | null
+  /** Solo il nome del file di registro: il worker lo cerca nella cartella dei registri, e solo lì. */
+  registro: string
+  /** Quando il worker l'ha vista finire (ms). */
+  finita?: number
+}
+
 export type Quadro = {
   quando: number
   /** Le animazioni sono spente nelle impostazioni: il pannello si comporta come con «riduci movimento». */
   fermo: boolean
+  /**
+   * La sandbox degli audit: le prove in corso e quelle appena finite. Manca del tutto dove la sandbox non
+   * c'è (un'altra macchina, la versione per lo store): lì il pannello non mostra niente che la riguardi.
+   */
+  sandbox?: { prove: Prova[] }
   fonti: Fonti
   conteggi: { agenti: number; lavoro: number; aspettano: number; errori: number; incroci: number }
   /** Tutto quello che aspetta una risposta, anche fuori dalla coda: serve agli avvisi. */
@@ -278,6 +324,11 @@ declare module 'orca' {
     'regia.apri': { input: Bersaglio; output: { aperto: boolean; come?: 'terminale' | 'scheda'; motivo?: string } }
     /** L'immagine caricata di un bot (per id), tra quelle già lette dalle case dei bot. Null: non ne ha. */
     'regia.foto': { input: { bot: string }; output: { impronta: string; url: string } | null }
+    /**
+     * Il registro di una prova della sandbox, per id di una prova del quadro: il nome del file non arriva mai
+     * dal pannello. `manca`: non è ancora stato scritto (la prova gira) o non c'è; `sconosciuta`: quell'id non è nel quadro.
+     */
+    'regia.registro': { input: { prova: string }; output: { stato: 'pronto' | 'manca' | 'sconosciuta'; nome: string; testo: string } }
   }
   interface PluginPanelEvents {
     /** Il quadro è cambiato: il pannello lo richiede con regia.quadro. */

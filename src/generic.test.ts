@@ -2,9 +2,9 @@
 // configured. These tests are about the generic parts: who holds the queue, how titles are read, the
 // optional state file, the settings, and what the worker reads and launches.
 import { afterEach, assert, mockHost, mountWorker, test } from 'orca/testing'
-import { BOTS, HOME, demoCli, demoHomes, demoState } from '../demo/demo.mjs'
-import { COMANDI, leggiMascotta, type Dipendenze } from './fonti'
-import { componi, componiCoda, leggiTitolo, normaCli, normaMotore, orchestratoreTra, ordinaProgetti, testoAvviso, voceBarra } from './norma'
+import { BOTS, HOME, demoCli, demoHomes, demoSandbox, demoState } from '../demo/demo.mjs'
+import { COMANDI, leggiMascotta, leggiSandbox, type Dipendenze } from './fonti'
+import { componi, componiCoda, leggiTitolo, normaCli, normaMotore, normaSandbox, orchestratoreTra, ordinaProgetti, proveFinite, testoAvviso, voceBarra } from './norma'
 import { impostazioniDa, NEUTRE, NOME, type Opzioni } from './opzioni'
 import { avvia, deactivate } from './worker'
 
@@ -147,13 +147,17 @@ test('settings: the defaults assume nothing, and odd values fall back to them', 
 
 // ---------- the worker, on a stand-in Orca and stand-in files ----------
 
-type Finte = { dip: Dipendenze; lanci: string[][]; letti: string[]; guardati: string[]; timer: { ms: number; fn: () => void }[] }
-function finte(file: Record<string, string> = {}): Finte {
+type Finte = { dip: Dipendenze; lanci: string[][]; letti: string[]; guardati: string[]; timer: { ms: number; fn: () => void }[]; elencati: string[]; byte: string[] }
+const SB = HOME + '/orca/sandbox'
+/** `sandbox`: files under ~/orca/sandbox by relative path (`attive/<id>.json`, `registri/<name>.log`); without it there is no sandbox. */
+function finte(file: Record<string, string> = {}, sandbox?: Record<string, string>): Finte {
   const cli = demoCli(NOW) as Record<string, unknown>
   const homes = demoHomes() as Record<string, unknown>
-  const lanci: string[][] = [], letti: string[] = [], guardati: string[] = [], timer: { ms: number; fn: () => void }[] = []
+  const lanci: string[][] = [], letti: string[] = [], guardati: string[] = [], timer: { ms: number; fn: () => void }[] = [], elencati: string[] = [], byte: string[] = []
+  const nelSb = (p: string) => (sandbox && p.startsWith(SB + '/') ? sandbox[p.slice(SB.length + 1)] : undefined)
   const dip: Dipendenze = {
     casa: HOME,
+    vivo: () => true,
     adesso: () => NOW,
     lancia: async (_eseguibile, argomenti) => {
       lanci.push(argomenti)
@@ -168,13 +172,28 @@ function finte(file: Record<string, string> = {}): Finte {
       if (percorso in file) return file[percorso]
       throw new Error('ENOENT: ' + percorso)
     },
-    elenca: async (cartella) => (cartella.endsWith('/.orca/bots') ? Object.keys(homes) : []),
-    stato: async () => {
-      throw new Error('ENOENT')
+    // Like readdir: a folder that does not exist is an error (there is no audit sandbox on this machine).
+    elenca: async (cartella) => {
+      elencati.push(cartella)
+      if (cartella.endsWith('/.orca/bots')) return Object.keys(homes)
+      if (sandbox && (cartella === SB || cartella.startsWith(SB + '/'))) {
+        const sotto = cartella === SB ? '' : cartella.slice(SB.length + 1) + '/'
+        return [...new Set(Object.keys(sandbox).filter((k) => k.startsWith(sotto)).map((k) => k.slice(sotto.length).split('/')[0]))]
+      }
+      if (cartella.includes('/.orca/bots/')) return []
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    },
+    stato: async (percorso) => {
+      const s = nelSb(percorso)
+      if (s === undefined) throw new Error('ENOENT')
+      return { file: true, byte: new TextEncoder().encode(s).length, modificato: NOW }
     },
     vero: async (percorso) => percorso,
-    leggiByte: async () => {
-      throw new Error('ENOENT')
+    leggiByte: async (percorso) => {
+      byte.push(percorso)
+      const s = nelSb(percorso)
+      if (s === undefined) throw new Error('ENOENT')
+      return new TextEncoder().encode(s)
     },
     dopo: (ms, fn) => {
       timer.push({ ms, fn })
@@ -185,7 +204,7 @@ function finte(file: Record<string, string> = {}): Finte {
       return { chiudi() {} }
     }
   }
-  return { dip, lanci, letti, guardati, timer }
+  return { dip, lanci, letti, guardati, timer, elencati, byte }
 }
 
 let attivo: { deactivate(): Promise<void> | void } | undefined
@@ -391,13 +410,101 @@ test('hostile text in any field of the picture comes out escaped in every view',
     if (x && typeof x === 'object') return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, avvelena(v, k)]))
     return x
   }
-  for (const base of [quadro(), quadro({ codaBot: 'Atlas' }), quadro({ codaBot: 'Nobody' }), conStato(12 * MIN)]) {
+  for (const base of [quadro(), quadro({ codaBot: 'Atlas' }), quadro({ codaBot: 'Nobody' }), conStato(12 * MIN), quadro({}, { sandbox: sandboxDemo() })]) {
     const q = avvelena(base) as any
     // The lanes are keyed by project name: keep the keys consistent after poisoning.
-    const html = [V.fonti(q, NOW), V.piede(q), V.tabellone(q, {}), V.tabellone(q, { aperto: 'lavoro' }), V.panoramica(q, NOW, {}), V.coda(q, NOW, { aperte: q.coda.voci.map((v: any) => v.uid) }), V.flussi(q, NOW, { tutti: true }), V.ufficio(q, NOW, {}), V.ufficio(q, NOW, { lista: true }), V.ufficio(q, NOW, { scelto: 'term_demo_rate' }), V.incroci(q), JSON.stringify(V.schede(q))].join('\n')
+    const html = [V.fonti(q, NOW), V.piede(q), V.tabellone(q, {}), V.tabellone(q, { aperto: 'lavoro' }), V.panoramica(q, NOW, {}), V.coda(q, NOW, { aperte: q.coda.voci.map((v: any) => v.uid) }), V.flussi(q, NOW, { tutti: true }), V.ufficio(q, NOW, {}), V.ufficio(q, NOW, { lista: true }), V.ufficio(q, NOW, { scelto: 'term_demo_rate' }), V.incroci(q), JSON.stringify(V.schede(q)), ...(q.sandbox ? q.sandbox.prove.map((p: any) => V.schedaProva(q, NOW, { prova: p.id, registro: { stato: 'pronto', nome: p.registro, testo: p.comando } })) : [])].join('\n')
     assert.ok(html.length > 5000)
     for (const vivo of ['<img src=x', '<script>alert', 'onerror=alert(1)>']) assert.equal(html.includes(vivo), false, vivo)
     // It is there, escaped: the test would mean nothing if the text were simply dropped.
     assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'))
+  }
+})
+
+// ---------- the audit sandbox: shown only where it exists ----------
+
+/** The invented sandbox as the worker reads it: two runs going, and one that ended a few minutes ago. */
+const sandboxDemo = () => {
+  const s = demoSandbox(NOW)
+  const vive = normaSandbox(s.attive, () => true, HOME)
+  const finita = normaSandbox([s.finita.file], () => true, HOME)
+  return { prove: [...vive, ...proveFinite(finita, vive, NOW - 4 * MIN)] }
+}
+const SEGNI_SANDBOX = ['lucch', 'recinto', 'in-sbx', 'tab-sbx', 'scheda-prova', 'prova-r', 'data-prova', 'data-blocchi', 'Sandbox', 'sandbox', 'blocked by', 'third-party code']
+
+test('no sandbox on this machine: no room, no lock, no count, no error, in any view', async () => {
+  const V = await import('../panel/viste.js')
+  for (const [nome, q] of [['default', quadro()], ['queue holder', quadro({ codaBot: 'Atlas' })], ['state file', conStato(2000)], ['state file stopped', conStato(12 * MIN)]] as const) {
+    assert.equal('sandbox' in q, false, nome)
+    const html = (await tutteLeViste(q)) + V.ufficio(q, NOW, { scelto: 'term_demo_rate' }) + V.schedaProva(q, NOW, { prova: 'x' })
+    for (const segno of SEGNI_SANDBOX) assert.equal(html.includes(segno), false, `${nome}: ${segno}`)
+  }
+  // A sandbox folder with nothing running shows nothing either.
+  const vuota = quadro({}, { sandbox: { prove: [] } })
+  const html = (await tutteLeViste(vuota)) + V.ufficio(vuota, NOW, { scelto: 'term_demo_rate' })
+  for (const segno of SEGNI_SANDBOX) assert.equal(html.includes(segno), false, `empty: ${segno}`)
+})
+
+test('worker, no sandbox: the folder is looked for once a round and nothing in it is read or watched', async () => {
+  const f = finte()
+  const { worker } = await monta(f)
+  const q = await worker.request('regia.aggiorna')
+  assert.equal('sandbox' in q, false)
+  assert.deepEqual(f.elencati.filter((c) => c.includes('/orca/sandbox')), [SB])
+  assert.ok(!f.guardati.some((c) => c.includes('sandbox')) && !f.byte.some((c) => c.includes('sandbox')))
+  assert.deepEqual(await worker.request('regia.registro', { prova: 'anything' }), { stato: 'sconosciuta', nome: '', testo: '' })
+})
+
+test('the sandbox, when it runs: a fenced room, a lock on who is inside, the counts, and the run card', async () => {
+  const V = await import('../panel/viste.js')
+  const sb = sandboxDemo()
+  assert.deepEqual(sb.prove.map((p) => [p.nome, p.stato]), [['left-pad-fork', 'in_corso'], ['csv-tool', 'in_corso'], ['md-render', 'finita']])
+  const q = quadro({}, { sandbox: sb })
+  // The scoreboard: two in the sandbox, three attempts blocked.
+  const tab = V.tabellone(q, {})
+  assert.ok(tab.includes('class="tab-sbx"') && /<b class="num">2<\/b><span>in sandbox<\/span>/.test(tab) && /<b class="num">3<\/b><span>blocked<\/span>/.test(tab))
+  // The Office: the fenced room first, with the agent of the terminal and the bot that ran one from its chat.
+  const mappa = V.ufficio(q, NOW, {})
+  assert.ok(mappa.includes('class="stanza-m recinto viva"') && mappa.includes('fenced room: running third-party code'))
+  assert.equal((mappa.match(/class="lucch-m/g) || []).length, 4) // two runs, each drawn on the narrow and the wide map
+  assert.ok(mappa.includes('✓ md-render · 2 blocked'))
+  const lista = V.ufficio(q, NOW, { lista: true })
+  assert.ok(lista.includes('<fieldset class="stanza recinto">') && lista.includes('left-pad-fork') && lista.includes('csv-tool') && lista.includes('md-render'))
+  // Sage's card in the Overview carries the lock and the button to its run.
+  const pan = V.panoramica(q, NOW, {})
+  const sage = pan.slice(pan.indexOf('data-bot="Sage"'), pan.indexOf('</article>', pan.indexOf('data-bot="Sage"')))
+  assert.ok(sage.includes('class="lucch"') && sage.includes('class="in-sbx"'))
+  // The run card: live while it runs, the log once it ended.
+  const viva = V.schedaProva(q, NOW, { prova: sb.prove[0].id })
+  assert.ok(viva.includes('sandbox · live') && viva.includes('npm test') && viva.includes('registry.npmjs.org') && viva.includes('3 blocked') && viva.includes('The log is written when the run ends'))
+  const finita = V.schedaProva(q, NOW, { prova: sb.prove[2].id, registro: { stato: 'pronto', nome: 'x.log', testo: demoSandbox(NOW).finita.registro } })
+  assert.ok(finita.includes('sandbox · ended') && finita.includes('class="reg"') && finita.includes('<span class="no">   1   curl deny(1)'))
+})
+
+test('worker, with a sandbox: only its status files and, on request, a log of a run it knows', async () => {
+  const s = demoSandbox(NOW)
+  const files: Record<string, string> = { 'attive/notes.txt': 'not a status file', 'attive/half.json.tmp': '{' }
+  for (const a of s.attive) files['attive/' + a.nome] = a.testo
+  const nomeLog = JSON.parse(s.attive[0].testo).registro.split('/').pop()
+  files['registri/' + nomeLog] = '# Sandbox: run log\n'
+  const f = finte({}, files)
+  const { worker } = await monta(f)
+  const q = await worker.request('regia.aggiorna')
+  assert.deepEqual(q.sandbox.prove.map((p: { nome: string }) => p.nome), ['left-pad-fork', 'csv-tool'])
+  assert.ok(f.guardati.includes(SB + '/attive'))
+  assert.ok(f.byte.every((p) => p.startsWith(SB + '/attive/') && p.endsWith('.json')), f.byte.join())
+  assert.deepEqual(await worker.request('regia.registro', { prova: q.sandbox.prove[0].id }), { stato: 'pronto', nome: nomeLog, testo: '# Sandbox: run log\n' })
+  assert.equal((await worker.request('regia.registro', { prova: q.sandbox.prove[1].id })).stato, 'manca')
+  assert.equal((await worker.request('regia.registro', { prova: '../../etc/passwd' })).stato, 'sconosciuta')
+  assert.equal((await leggiSandbox(f.dip))!.length, 2)
+})
+
+test('CLI marks: Codex and Grok CLI show their own mark; Claude Code and Gemini CLI keep a neutral shape with the name written', async () => {
+  const V = await import('../panel/viste.js')
+  assert.ok(V.marchio('openai').includes('<span class="segno-m" aria-hidden="true">&gt;_</span>') && V.marchio('openai').includes('aria-label="Codex"'))
+  assert.ok(V.marchio('grok').includes('<img src="./marchi/grok-cli.svg"') && V.marchio('grok').includes('aria-label="Grok CLI"'))
+  for (const [id, nome] of [['claude', 'Claude'], ['gemini', 'Gemini']]) {
+    const m = V.marchio(id)
+    assert.ok(m.includes('class="marchio neutro"') && m.includes(`<span class="nome-m">${nome}</span>`) && !m.includes('<img'), id)
   }
 })

@@ -4,7 +4,7 @@
 // Regola sui testi: nel quadro entrano solo titoli e prime righe, mai il testo intero di un
 // messaggio o di un prompt.
 import { NOME, opzioniPredefinite, type Opzioni } from './opzioni'
-import type { Agente, Attesa, Bot, Coda, Figlio, Fonti, Messaggio, Progetto, Quadro, Scheda, VoceCoda } from './protocol'
+import type { Agente, Attesa, Bot, Coda, Figlio, Fonti, Messaggio, Progetto, Prova, Quadro, Scheda, VoceCoda } from './protocol'
 
 type Grezzo = any
 
@@ -826,6 +826,96 @@ export function componiCoda(bot: Bot[], progetti: Progetto[], o: Opzioni = opzio
   }
 }
 
+// ---------- la sandbox degli audit ----------
+
+/** Un file di `~/orca/sandbox/attive`, com'è: il suo nome e il suo testo. */
+export type StatoLetto = { nome: string; testo: string }
+const ID_PROVA = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/
+const HANDLE = /^[\w:.-]{1,120}$/
+const STATI_PROVA = ['avvio', 'in_corso', 'chiusura'] as const
+/** Per quanto una prova finita resta nel quadro, così il suo registro si può ancora aprire con un clic. */
+export const TIENI_FINITE_MS = 15 * 60_000
+export const MASSIMO_FINITE = 6
+
+/**
+ * Un file di stato della sandbox, letto con la mano larga sui campi e stretta su chi è: serve un oggetto
+ * JSON con un `id` uguale al nome del file e un `pid`. Il resto può mancare o essere null (all'avvio
+ * `secondi` non c'è, e un campo vuoto è null): resta vuoto, non viene inventato. Uno stato che non conosco
+ * vale «in corso»: se il file c'è, la prova gira. Del registro tengo solo il nome del file.
+ * Null: non è un file di stato. Il `pid` torna a parte: dice se la prova è ancora viva.
+ */
+export function normaProva(letto: StatoLetto, casa = ''): { prova: Prova; pid: number } | null {
+  let g: Grezzo
+  try {
+    g = JSON.parse(letto.testo)
+  } catch {
+    return null
+  }
+  if (!g || typeof g !== 'object' || Array.isArray(g)) return null
+  const id = letto.nome.replace(/\.json$/, '')
+  if (!ID_PROVA.test(id) || (g.id !== undefined && g.id !== null && String(g.id) !== id)) return null
+  const pid = typeof g.pid === 'number' && Number.isInteger(g.pid) && g.pid > 1 ? g.pid : 0
+  if (!pid) return null
+  const numero = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null)
+  const handle = (v: unknown): string | null => (typeof v === 'string' && HANDLE.test(v) ? v : null)
+  const testo = (v: unknown, n: number): string => (typeof v === 'string' ? corto(v, n, casa) : '')
+  const registro = typeof g.registro === 'string' ? g.registro.slice(g.registro.lastIndexOf('/') + 1) : ''
+  return {
+    pid,
+    prova: {
+      id,
+      nome: testo(g.nome, 60) || id,
+      stato: (STATI_PROVA as readonly string[]).includes(g.stato) ? g.stato : 'in_corso',
+      agente: testo(g.agente, 24).toLowerCase(),
+      bot: testo(g.bot, 60),
+      terminale: handle(g.terminale),
+      worktree: handle(g.worktree),
+      workspace: handle(g.workspace),
+      scheda: handle(g.scheda),
+      cartella: testo(g.cartella, 200),
+      comando: testo(g.comando, 200),
+      inizio: typeof g.inizio === 'string' ? ms(g.inizio) : null,
+      rete: g.rete === 'si' || g.rete === true,
+      dominio: testo(g.dominio, 80),
+      tempoMax: numero(g.tempo_max),
+      cpuMax: numero(g.cpu_max),
+      memMaxMb: numero(g.mem_max_mb),
+      bloccati: numero(g.bloccati) ?? 0,
+      memoriaMb: numero(g.memoria_mb),
+      processi: numero(g.processi),
+      secondi: numero(g.secondi),
+      registro: /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.log$/.test(registro) ? registro : ''
+    }
+  }
+}
+
+/**
+ * Le prove vive: i file che sono davvero file di stato e il cui `pid` è ancora un processo (un file
+ * rimasto dopo un `kill -9` è orfano, e si ignora). In ordine d'inizio.
+ */
+export function normaSandbox(letti: StatoLetto[], vivo: (pid: number) => boolean, casa = ''): Prova[] {
+  const prove: Prova[] = []
+  for (const l of letti) {
+    const n = normaProva(l, casa)
+    if (n && vivo(n.pid) && !prove.some((p) => p.id === n.prova.id)) prove.push(n.prova)
+  }
+  return prove.sort((x, y) => (x.inizio ?? 0) - (y.inizio ?? 0) || x.id.localeCompare(y.id))
+}
+
+/**
+ * Da un giro al successivo: una prova che c'era e non c'è più è finita, e resta nel quadro per un quarto
+ * d'ora (al massimo le ultime sei) col suo ultimo stato, così il registro si apre ancora con un clic.
+ */
+export function proveFinite(prima: Prova[], vive: Prova[], adesso: number): Prova[] {
+  const ci = new Set(vive.map((p) => p.id))
+  return prima
+    .filter((p) => !ci.has(p.id))
+    .map((p): Prova => (p.stato === 'finita' ? p : { ...p, stato: 'finita', finita: adesso }))
+    .filter((p) => adesso - (p.finita ?? adesso) < TIENI_FINITE_MS)
+    .sort((x, y) => (y.finita ?? 0) - (x.finita ?? 0))
+    .slice(0, MASSIMO_FINITE)
+}
+
 // ---------- il quadro ----------
 
 export type Ingressi = {
@@ -843,6 +933,8 @@ export type Ingressi = {
   motoreSpento?: boolean
   /** Le animazioni sono spente nelle impostazioni. */
   fermo?: boolean
+  /** Le prove della sandbox, vive e appena finite. Null o assente: su questa macchina la sandbox non c'è. */
+  sandbox?: { prove: Prova[] } | null
 }
 
 export function componi(x: Ingressi): Quadro {
@@ -969,6 +1061,7 @@ export function componi(x: Ingressi): Quadro {
   return {
     quando: x.adesso,
     fermo: Boolean(x.fermo),
+    ...(x.sandbox ? { sandbox: { prove: x.sandbox.prove } } : {}),
     fonti: {
       cli: { ok: Boolean(cli) && !x.cli.errore, quando: x.cli.quando, errore: x.cli.errore },
       motore: { ok: motoreVivo, aggiornato: motore?.aggiornato ?? null, errore: x.motore.errore, spento: Boolean(x.motoreSpento), ...(agenti.some((a) => a.vecchio !== undefined) ? { ultimi: true } : {}) },

@@ -22,17 +22,19 @@ let vista = 'panoramica'
 // Della coda: `filtro` («oggi», «decidere», «corso»), `progetto` (una corsia sola; undefined: tutte) e
 // `chiuse`, le corsie richiuse, che restano nello storage del plugin (storage:own) tra una volta e l'altra.
 // Dell'Office: `lista` (l'elenco di schede al posto della mappa) e `scelto` (l'avatar con la scheda aperta).
-const scelte = { lista: false, scelto: '', tipo: '', tutti: false, stato: '', fornitore: '', aperte: [], filtro: '', progetto: undefined, chiuse: [] }
+// Della sandbox: `prova`, l'id della prova di cui è aperta la scheda (da qualsiasi vista).
+const scelte = { lista: false, scelto: '', tipo: '', tutti: false, stato: '', fornitore: '', aperte: [], filtro: '', progetto: undefined, chiuse: [], prova: '' }
 const CHIAVE_CHIUSE = 'coda.corsieChiuse'
 // L'elenco aperto sotto il tabellone: `fisso` l'ha aperto un clic (o un tocco), `sopra` il passaggio del mouse.
 const tab = { fisso: '', sopra: '' }
 const chiudiTab = () => { tab.fisso = ''; tab.sopra = '' }
 // Gli agenti avviati dai bot che sono appena nati, che hanno appena finito o che non ci sono più: per un
 // attimo il diagramma li disegna con la loro animazione (viste.js: nasce, spegne, esce).
-const mosse = { nati: new Map(), spenti: new Map(), usciti: [], entrati: new Map(), partiti: [] }
+// `passati`: chi è appena entrato nella stanza Sandbox dell'Office, o ne è appena uscito.
+const mosse = { nati: new Map(), spenti: new Map(), usciti: [], entrati: new Map(), partiti: [], passati: new Map() }
 const DURA_MOSSA = 1400
 let timerMosse = 0
-const ultimo = { vista: '', fonti: '', schede: '', piede: '', tabellone: '' }
+const ultimo = { vista: '', fonti: '', schede: '', piede: '', tabellone: '', prova: '' }
 // I numeri del tabellone all'ultimo disegno: quando uno cambia, per un attimo si accende.
 const contiPrima = new Map()
 let timerAvviso = 0
@@ -119,14 +121,78 @@ function disegna() {
     'schede'
   )
   metti($('scr'), V.piede(quadro), 'piede')
-  metti($('tabellone'), V.tabellone(senzaGuaste(quadro), { vista, stato: scelte.stato, fornitore: scelte.fornitore, aperto: tab.sopra || tab.fisso }), 'tabellone')
+  metti($('tabellone'), V.tabellone(senzaGuaste(quadro), { vista, stato: scelte.stato, fornitore: scelte.fornitore, aperto: tab.sopra || tab.fisso, prova: scelte.prova }), 'tabellone')
   for (const el of $('tabellone').querySelectorAll('[data-conta]')) {
     const prima = contiPrima.get(el.dataset.conta)
     contiPrima.set(el.dataset.conta, el.textContent)
     // Il numero è cambiato: una piccola animazione (il CSS la spegne con «riduci movimento»).
     if (prima !== undefined && prima !== el.textContent && !fermo) el.classList.add(Number(el.textContent) > Number(prima) ? 'sale' : 'scende')
   }
-  metti($('vista'), VISTE[vista](senzaGuaste(quadro), ora, { ...scelte, nati: [...mosse.nati.keys()], spenti: [...mosse.spenti.keys()], usciti: mosse.usciti, entrati: [...mosse.entrati.keys()], partiti: mosse.partiti }), 'vista')
+  metti($('vista'), VISTE[vista](senzaGuaste(quadro), ora, { ...scelte, nati: [...mosse.nati.keys()], spenti: [...mosse.spenti.keys()], usciti: mosse.usciti, entrati: [...mosse.entrati.keys()], partiti: mosse.partiti, passati: [...mosse.passati.keys()] }), 'vista')
+  // La scheda della prova scelta sta sotto ogni vista: dal vivo finché gira, col registro quando è finita.
+  const prova = scelte.prova ? (quadro.sandbox?.prove ?? []).find((p) => p.id === scelte.prova) : null
+  if (prova) copiaProva = prova
+  if ($('prova')) metti($('prova'), scelte.prova ? V.schedaProva(quadro, ora, { prova: scelte.prova, registro: registri.get(scelte.prova), copia: copiaProva }) : '', 'prova')
+  if (scelte.prova && (!prova || prova.stato === 'finita')) void chiediRegistro(scelte.prova)
+}
+
+// ---------- la sandbox: il registro di una prova, e il lampo a ogni tentativo bloccato ----------
+// Il registro la sandbox lo scrive solo a prova finita: lo si chiede al worker allora, per id della prova.
+// Se non c'è ancora si riprova qualche volta (la prova può essere finita un attimo prima del file).
+const registri = new Map()
+const tentativi = new Map()
+const chiestoIl = new Map()
+let copiaProva = null
+async function chiediRegistro(id) {
+  const fatti = tentativi.get(id) ?? 0
+  if (registri.get(id)?.stato === 'pronto' || registri.get(id)?.attesa || fatti >= 4 || Date.now() - (chiestoIl.get(id) ?? 0) < 1500) return
+  chiestoIl.set(id, Date.now())
+  tentativi.set(id, fatti + 1)
+  registri.set(id, { ...registri.get(id), attesa: true })
+  let r
+  try {
+    r = await api.plugin.request('regia.registro', { prova: id })
+  } catch {
+    r = null
+  }
+  registri.set(id, r && r.stato === 'pronto' && typeof r.testo === 'string' ? { stato: 'pronto', nome: String(r.nome ?? ''), testo: r.testo } : fatti + 1 >= 4 || r?.stato === 'sconosciuta' ? { stato: 'manca' } : {})
+  if (r?.stato === 'sconosciuta') tentativi.set(id, 4)
+  if (scelte.prova !== id) return
+  disegna()
+  // La scheda cresce col registro: resta in vista.
+  if (registri.get(id).stato === 'pronto') $('scheda-prova')?.scrollIntoView({ block: 'nearest', behavior: fermo ? 'auto' : 'smooth' })
+}
+/** Quanti tentativi bloccati aveva ogni prova all'ultimo quadro. */
+const bloccatiPrima = new Map()
+const DURA_LAMPO = 950
+let timerLampo = 0
+/**
+ * Un tentativo bloccato in più (rete, file, limiti): un lampo rosso sulla stanza, sul lucchetto e sul
+ * conteggio di quella prova. Con «riduci movimento» niente lampo: cambia solo il numero.
+ */
+function lampeggia(q) {
+  const scattate = new Set()
+  for (const p of q.sandbox?.prove ?? []) {
+    const prima = bloccatiPrima.get(p.id)
+    bloccatiPrima.set(p.id, p.bloccati)
+    if (prima !== undefined && p.bloccati > prima && p.stato !== 'finita') scattate.add(p.id)
+  }
+  for (const id of bloccatiPrima.keys()) if (!(q.sandbox?.prove ?? []).some((p) => p.id === id)) bloccatiPrima.delete(id)
+  if (fermo || !scattate.size) return
+  for (const el of document.querySelectorAll('[data-blocchi]')) {
+    if (el.dataset.blocchi !== '*' && !scattate.has(el.dataset.blocchi)) continue
+    el.classList.remove('lampo-r')
+    void el.getBoundingClientRect()
+    el.classList.add('lampo-r')
+  }
+  clearTimeout(timerLampo)
+  timerLampo = setTimeout(() => { for (const el of document.querySelectorAll('.lampo-r')) el.classList.remove('lampo-r') }, DURA_LAMPO)
+}
+/** Gli agenti che in un quadro stanno nella stanza Sandbox, per chiave (anche gli ospiti). */
+const nellaSandbox = (q) => {
+  if (!q?.sandbox) return new Set()
+  const s = V.inSandbox(q)
+  return new Set([...s.perAgente.keys(), ...s.deiBot.map((x) => 'bot:' + x.bot.id), ...s.sciolte.map((p) => 'prova:' + p.id)])
 }
 
 function avviso(testo) {
@@ -160,18 +226,22 @@ function muovi(prima, dopo) {
   for (const k of sono.keys()) if (!erano.has(k)) mosse.entrati.set(k, c)
   for (const [k, a] of erano) if (!sono.has(k)) mosse.partiti.push({ ...a, fino: c })
   mosse.partiti = mosse.partiti.filter((u) => !sono.has(u.chiave)).slice(-24)
-  if (!mosse.nati.size && !mosse.spenti.size && !mosse.usciti.length && !mosse.entrati.size && !mosse.partiti.length) return
+  // Chi entra nella stanza Sandbox o ne esce compare lì (o di nuovo nella sua stanza) con un'animazione sua.
+  const fuori = nellaSandbox(prima), dentro = nellaSandbox(dopo)
+  for (const k of dentro) if (!fuori.has(k)) mosse.passati.set(k, c)
+  for (const k of fuori) if (!dentro.has(k)) mosse.passati.set(k, c)
+  if (!mosse.nati.size && !mosse.spenti.size && !mosse.usciti.length && !mosse.entrati.size && !mosse.partiti.length && !mosse.passati.size) return
   clearTimeout(timerMosse)
   timerMosse = setTimeout(posa, DURA_MOSSA + 50)
 }
 /** Finita l'animazione, nodini e avatar tornano fermi e quelli spariti se ne vanno. */
 function posa() {
   const ora = Date.now()
-  for (const m of [mosse.nati, mosse.spenti, mosse.entrati]) for (const [k, fino] of m) if (fino <= ora) m.delete(k)
+  for (const m of [mosse.nati, mosse.spenti, mosse.entrati, mosse.passati]) for (const [k, fino] of m) if (fino <= ora) m.delete(k)
   mosse.usciti = mosse.usciti.filter((u) => u.fino > ora)
   mosse.partiti = mosse.partiti.filter((u) => u.fino > ora)
   disegna()
-  if (mosse.nati.size || mosse.spenti.size || mosse.usciti.length || mosse.entrati.size || mosse.partiti.length) timerMosse = setTimeout(posa, 300)
+  if (mosse.nati.size || mosse.spenti.size || mosse.usciti.length || mosse.entrati.size || mosse.partiti.length || mosse.passati.size) timerMosse = setTimeout(posa, 300)
 }
 
 async function carica(nome = 'regia.quadro') {
@@ -181,6 +251,7 @@ async function carica(nome = 'regia.quadro') {
     animazioni(quadro)
     muovi(prima, quadro)
     disegna()
+    lampeggia(quadro)
   } catch (errore) {
     // Resta scritto nei log del plugin (`orca plugin logs`): un errore qui non deve passare in silenzio.
     console.error('[panel]', errore)
@@ -244,6 +315,23 @@ async function apriInOrca(d) {
 }
 
 document.addEventListener('click', async (evento) => {
+  // Il lucchetto, la stanza Sandbox, «N in sandbox» e «N blocked» aprono la scheda di quella prova; un altro
+  // clic sullo stesso, o la ✕, la chiude. Viene prima di tutto: un lucchetto può stare dentro un altro tasto.
+  const sbx = evento.target instanceof Element ? evento.target.closest('[data-prova]') : null
+  if (sbx) {
+    nascondiFumetto()
+    chiudiTab()
+    const id = sbx.dataset.prova
+    scelte.prova = scelte.prova === id ? '' : id
+    if (scelte.prova) {
+      scelte.scelto = ''
+      tentativi.delete(scelte.prova)
+      chiestoIl.delete(scelte.prova)
+    }
+    disegna()
+    if (scelte.prova) $('scheda-prova')?.scrollIntoView({ block: 'nearest', behavior: fermo ? 'auto' : 'smooth' })
+    return
+  }
   const el = evento.target instanceof Element ? evento.target.closest('button, [data-apri], [data-vai], [data-vista], [data-scegli]') : null
   // Un clic fuori dal tabellone richiude il suo elenco; uno dentro (una riga, «show in Office») pure, dopo aver fatto il suo.
   const fuori = !(evento.target instanceof Element && evento.target.closest('#tabellone'))
@@ -278,6 +366,7 @@ document.addEventListener('click', async (evento) => {
   } else if ('scegli' in d) {
     // Un clic su un avatar apre la sua scheda sotto la mappa; un altro clic, o la ✕, la chiude.
     scelte.scelto = scelte.scelto === d.scegli ? '' : d.scegli
+    if (scelte.scelto) scelte.prova = ''
     disegna()
     if (scelte.scelto) $('scheda-agente')?.scrollIntoView({ block: 'nearest', behavior: fermo ? 'auto' : 'smooth' })
   } else if ('ufficioLista' in d) {
@@ -337,6 +426,7 @@ document.addEventListener('change', (evento) => {
 document.addEventListener('keydown', (evento) => {
   if (evento.key === 'Escape') {
     if (tab.fisso || tab.sopra) { chiudiTab(); disegna() }
+    else if (scelte.prova) { scelte.prova = ''; disegna() }
     return nascondiFumetto()
   }
   if (evento.key !== 'Enter' && evento.key !== ' ') return

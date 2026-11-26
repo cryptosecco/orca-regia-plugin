@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.3 — 2026-11-26
+
+- CLI marks: the scoreboard and the Office show the `>_` of Codex and the mark of Grok CLI instead of a plain shape. Claude Code and Gemini CLI keep a plain shape with the name written: their owners' trademark rules ask for permission first. Details and attributions in NOTICE.md.
+- The audit sandbox, if you have one: when `~/orca/sandbox/` exists and a run is going, the scoreboard says "N in sandbox" and "N blocked", whoever runs third-party code gets a lock and walks into a fenced Sandbox room in the Office, every blocked attempt flashes red, and a click opens the run, live, then its log. The status-file format is in the README. Without that folder nothing appears, nothing is read and nothing is watched.
+- Same capabilities and settings as 0.8.2: no new approval.
+
 ## 0.8.2 — 2026-11-24
 
 - The Office is a map: one room per project, one avatar per bot and agent, at a desk when working, with a question mark when waiting on you. The list is one click away.

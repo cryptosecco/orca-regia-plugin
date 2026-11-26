@@ -17,9 +17,11 @@ The pictures on this page are mock-ups: the panel itself, on invented bots and p
 | **Flows** | The same diagram, and the recent messages between bots, coordinators and workers: subject and first line. |
 | **Office** | A map seen from above: one room per project, one avatar per bot and agent. Who is working sits at a desk, who waits on you has a question mark, the others rest on the couch. A click on an avatar opens its card, with the button for its chat or terminal. The list of before is one click away ("list"). |
 
-Above every view, a scoreboard counts the agents working now, then by provider (only providers with someone at work), and those waiting on you or failing. Hovering or pressing a number lists exactly those agents, and from there one click goes to the agent or to the Office already filtered. Providers are shown with plain shapes and their names: the plugin ships no third-party logo.
+Above every view, a scoreboard counts the agents working now, then by provider (only providers with someone at work), and those waiting on you or failing. Hovering or pressing a number lists exactly those agents, and from there one click goes to the agent or to the Office already filtered. Providers are shown by the mark of the CLI the agent runs where the vendor's rules allow it (the `>_` of Codex, the mark of Grok CLI), and by a plain shape with the name written next to it otherwise (Claude Code, Gemini CLI). See "CLI marks" below.
 
 The header stays silent while everything arrives: a line appears only when a source stops answering. Long explanations sit behind "how to read this". A status bar item shows how many decisions wait ("Regia · 3 to decide · 1 today"), and a desktop notification tells you when something new is waiting; it is never repeated for the same thing.
+
+If you run third-party code in an audit sandbox that writes status files (see "The audit sandbox" below), the panel shows it: "2 in sandbox" and "3 blocked" in the scoreboard, a lock on whoever is running something, a fenced **Sandbox** room in the Office that they walk into while the run goes, a red flash at every blocked attempt, and on a click the run itself, live, then its log. Without such a sandbox none of this appears.
 
 The panel updates by itself every few seconds, follows Orca's light or dark theme, and stops its animations when your system asks to reduce motion.
 
@@ -58,6 +60,7 @@ It asks Orca for six capabilities:
 - **The `orca` CLI**, one command at a time, from a fixed list of eight read commands: `bot list`, `bot item list`, `bot work list`, `bot chats`, `worktree ps`, `automations list`, `orchestration inbox`, `orchestration worker-list`. A bot enters a command only by its id.
 - **`~/.orca/bots/<bot>/bot.json`**, for the bot's id, name and avatar; and the bot's uploaded picture in that folder, if it has one (up to 1 MB, checked to be a real image, links refused).
 - **Orca's own mascot pictures**, from the Orca app on your machine, for bots that use one. The plugin does not ship them.
+- **`~/orca/sandbox/`, only if that folder exists**: the status files in `attive/` (only `*.json`, up to 64 kB each, links refused) and, when you open a finished run, its log in `registri/` (only a `.log` file named by that run's status file, up to 512 kB). See "The audit sandbox". If the folder is not there, nothing in it is read or watched.
 - **Nothing else.** In particular, no file of your projects.
 
 Messages between agents are read whole by the worker and cut to subject and first line before anything is shown or stored. Prompts, tool input and terminal previews are dropped.
@@ -101,6 +104,17 @@ If you (or the bot that keeps your queue) write item titles like this, the Queue
 
 A deadline of today, or one already passed, moves the item to the top whatever its dot says. A title written any other way is left exactly as it is, with no priority and no project: nothing is guessed. Dates are day first, then month.
 
+### The audit sandbox
+
+There is no setting for it. At every round the worker looks whether `~/orca/sandbox/` exists; if it does not, that is the end of it: no file is read, no folder is watched, and the panel shows no room, lock, count or error about it.
+
+If it exists, the worker reads, and only reads, what a sandbox tool keeps there while it runs third-party code:
+
+- `attive/<id>.json`, one per run in progress, removed when the run ends. `<id>` is `<yyyymmdd-hhmmss>-<name>-<pid>` and must match the `id` field. Fields: `stato` (`avvio`, `in_corso`, `chiusura`), `pid` (the run's process: a file whose process is gone is ignored), `agente`, `bot`, `terminale` (the Orca terminal handle, which ties the run to an agent in the Office), `worktree`, `workspace`, `scheda`, `cartella`, `comando`, `nome`, `inizio` (ISO time), `rete` (`si` or `no`), `dominio`, `tempo_max`, `cpu_max`, `mem_max_mb`, `bloccati` (attempts blocked so far), `memoria_mb`, `processi`, `secondi`, `registro` (the path of the log, of which only the file name is used). Missing or `null` fields stay empty. `*.json.tmp` files are ignored.
+- `registri/<name>.log`, the log written when a run ends, read only when you open that run.
+
+A run that ends stays in the Office for a quarter of an hour, so its log can still be opened. The plugin never writes, deletes or launches anything there. The format comes from a small macOS sandbox script (Seatbelt) we use for audits; it is not a standard and may change.
+
 ### The optional state file
 
 Orca's CLI tells the plugin which agents exist and what state they are in. It does not tell which model an agent runs, how full its context is, or which files it touches. If you have a tool that writes that to a JSON file, give its path here and the Office gains model, effort, context and cache for each agent, and a fifth view, **Overlaps**, shows when two agents touch the same files.
@@ -115,6 +129,19 @@ Without a state file set none of this exists: nothing is missing from the other 
 - A bot's mascot is shown only where the Orca app is at its default macOS location. Elsewhere the bot gets a drawn icon derived from its name; uploaded pictures and emoji avatars work everywhere.
 - Names in the message list are inferred: Orca's mail records terminals and sessions, not names.
 - Not tried on Windows or Linux.
+
+## CLI marks
+
+Where an agent's CLI is known, the scoreboard and the Office show its mark instead of the provider's name. What each vendor's trademark rules say was checked on 26 November 2026; the details are in [NOTICE](NOTICE.md).
+
+| CLI | What is shown | Why |
+|---|---|---|
+| Codex (OpenAI) | `>_`, written in the panel's monospace font | the two characters its start screen opens with; no logo file |
+| Grok CLI (xAI) | the mark its start screen draws in braille, dot for dot (`panel/marchi/grok-cli.svg`), white on dark, black on light | xAI's brand guidelines allow its marks to accurately refer to its services |
+| Claude Code (Anthropic) | a circle and the name "Claude" | Anthropic allows its marks only as it specifically permits, in materials approved beforehand; a plain-text mention is fine |
+| Gemini CLI (Google) | a triangle and the name "Gemini" | Google licenses its brand features only after approving a permission request |
+
+The name of the CLI is always in the tooltip and the accessible label, and comes back on screen if an image does not load. Codex and Grok are trademarks of their owners; they are used only to say which tool an agent runs, and imply no endorsement.
 
 ## Tests
 
@@ -131,19 +158,20 @@ orca plugin test . --json
 |---|---|
 | `orca-plugin.json` | the manifest: panel, command, status bar item, events, settings, capabilities |
 | `src/worker.ts` | the worker: reading rounds that never overlap, the status bar, notifications, the click |
-| `src/fonti.ts` | the sources outside the plugin API: the CLI's fixed command list, the bot folders, the optional state file |
+| `src/fonti.ts` | the sources outside the plugin API: the CLI's fixed command list, the bot folders, the optional state file, the audit sandbox |
 | `src/norma.ts` | pure functions: from raw data to the picture the panel draws |
 | `src/opzioni.ts` | the settings and their neutral defaults |
 | `src/protocol.ts` | the contract between worker and panel |
 | `panel/viste.js` | the views as pure functions: from the picture to HTML |
 | `panel/testi.js` | every text of the panel, in one table |
+| `panel/marchi/` | the CLI marks the panel ships, and the list of which provider has one |
 | `panel/regia.js`, `index.html`, `regia.css` | the page: asks for the picture, redraws what changed, runs the clicks |
 
 No build step: Orca loads the TypeScript as it is written. Code comments and identifiers are in Italian; everything a user sees is in English.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Third-party marks: see [NOTICE](NOTICE.md).
 
 ---
 

@@ -244,3 +244,51 @@ export function demoState(now = Date.now(), age = 2000) {
     ]
   }
 }
+
+/**
+ * An invented audit sandbox (the status files a sandbox tool keeps in `~/orca/sandbox/attive/` while a
+ * run goes, and the log it writes when the run ends). `attive`: what the worker would read, as
+ * `{ nome, testo }`. `finita`: a run that ended a few minutes ago, with its `registro` text.
+ */
+export function demoSandbox(now = Date.now()) {
+  const iso = (t) => new Date(t).toISOString().replace(/\.\d+Z$/, 'Z')
+  const stamp = (t) => iso(t).replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
+  const run = (name, pid, start, fields) => {
+    const id = `${stamp(start)}-${name}-${pid}`
+    return { id, pid, nome: name, inizio: iso(start), registro: `${HOME}/orca/sandbox/registri/${stamp(start)}-${name}.log`, ...fields }
+  }
+  const file = (r) => ({ nome: `${r.id}.json`, testo: JSON.stringify(r, null, 2) })
+  // Run from the agent's terminal: the test suite of a package under review, with one domain open.
+  const tests = run('left-pad-fork', 41213, now - 2 * MIN, { stato: 'in_corso', agente: 'claude', bot: null, terminale: 'term_demo_rate', worktree: null, workspace: null, scheda: null, cartella: '/tmp/audit/left-pad-fork', comando: 'npm test', rete: 'si', dominio: 'registry.npmjs.org', tempo_max: 300, cpu_max: 300, mem_max_mb: 2048, bloccati: 3, memoria_mb: 184, processi: 5, secondi: 118 })
+  // Run from a bot's chat: no terminal, only the bot's name.
+  const binary = run('csv-tool', 41377, now - 40 * 1000, { stato: 'in_corso', agente: 'claude', bot: 'Sage', terminale: null, worktree: null, workspace: null, scheda: null, cartella: '/tmp/audit/csv-tool', comando: './csv-tool --help', rete: 'no', dominio: null, tempo_max: 30, cpu_max: 30, mem_max_mb: 512, bloccati: 0, memoria_mb: 22, processi: 2, secondi: 38 })
+  const ended = run('md-render', 40990, now - 11 * MIN, { stato: 'in_corso', agente: 'codex', bot: null, terminale: null, worktree: null, workspace: null, scheda: null, cartella: '/tmp/audit/md-render', comando: 'node install.js', rete: 'no', dominio: null, tempo_max: 120, cpu_max: 120, mem_max_mb: 1024, bloccati: 2, memoria_mb: 61, processi: 3, secondi: 21 })
+  const log = [
+    '# Sandbox: run log',
+    `date:      ${iso(now - 11 * MIN + 21_000).replace('T', ' ').replace('Z', '')}`,
+    'folder:    /tmp/audit/md-render (run on a copy)',
+    'command:   node install.js',
+    'limits:    time 120s, CPU 120s, memory 1024 MB',
+    'network:   closed',
+    'result:    exit code 1, ended by itself, 21s, peak memory 61 MB',
+    '',
+    '## Processes started',
+    '  40995 node install.js',
+    '  41002 sh -c curl -s stats.example.net/i',
+    '',
+    '## Attempts blocked by the sandbox',
+    '   1   node deny(1) file-read-data ~/.npmrc',
+    '   1   curl deny(1) network-outbound remote:*:443',
+    '',
+    '## Files written (inside the copy)',
+    '  ./src/dist/render.js',
+    '',
+    '## Output (last lines)',
+    '  | building md-render 0.3.1',
+    '  | done in 1.8s',
+    '',
+    '## Errors (last lines)',
+    '  ! curl: (7) Failed to connect to stats.example.net port 443'
+  ].join('\n')
+  return { attive: [file(tests), file(binary)], finita: { file: file(ended), registro: log } }
+}

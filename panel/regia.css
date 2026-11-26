@@ -94,16 +94,29 @@ button { background: none; border: 0; padding: 0; cursor: pointer; text-align: i
 .chi-dove { grid-area: d; color: var(--tenue); font-size: 10.5px; }
 .chi-fa { grid-area: a; color: var(--testo2); }
 
-/* I segni dei fornitori: forme semplici disegnate qui, col nome accanto. Quando il fornitore ha agenti al
-   lavoro il segno respira con `scale()` e opacità; con prefers-reduced-motion resta fermo. */
+/* I segni dei fornitori. Dove le regole del marchio lo permettono, il segno della CLI (il «>_» di Codex, il
+   segno di Grok CLI), mostrato com'è: mai deformato (larghezza e altezza scritte, `object-fit: contain`).
+   Gli altri: forme semplici disegnate qui, col nome accanto. Quando il fornitore ha agenti al lavoro il
+   segno respira con `scale()` (uguale sui due assi) e opacità; con prefers-reduced-motion resta fermo. */
 .marchio { display: inline-flex; align-items: center; gap: 4px; flex: none; vertical-align: middle; }
+.marchio img { width: var(--m, 14px); height: var(--m, 14px); display: block; object-fit: contain; filter: none; image-rendering: pixelated; }
+/* Il segno di Grok CLI è bianco, come nel terminale; sulla carta chiara è nero (la versione monocromatica scura). */
+html.light .marchio.m-grok img { filter: invert(1); }
+/* Il «>_» di Codex CLI: caratteri del terminale, come li scrive la CLI, nel carattere a spaziatura fissa. */
+.marchio .segno-m { display: inline-block; font: 700 calc(var(--m, 14px) * 0.86)/1 var(--mono); color: var(--testo); white-space: nowrap; }
 .marchio svg { width: calc(var(--m, 14px) * 0.72); height: calc(var(--m, 14px) * 0.72); display: block; fill: currentColor; }
 .marchio svg .vuoto { fill: none; stroke: currentColor; stroke-width: 1.4; }
-.marchio.vivo svg { animation: respiro 2.6s ease-in-out infinite; }
+.marchio .nome-m { display: none; }
+.marchio.neutro .nome-m, .marchio.rotta .nome-m { display: inline; }
+.marchio.rotta img { display: none; }
+.marchio.vivo img, .marchio.vivo svg, .marchio.vivo .segno-m { animation: respiro 2.6s ease-in-out infinite; }
 @keyframes respiro { 0%, 100% { transform: scale(1); opacity: 0.84; } 50% { transform: scale(1.14); opacity: 1; } }
 /* Nel cartellino sotto la foto: sempre su fondo scuro, anche quando la scheda è accesa. */
 .pfp .cart.marca, .acceso .pfp .cart.marca, .viva .pfp .cart.marca { --m: 12px; padding: 1px 3px; background: var(--sup); color: var(--c, var(--menta2)); border-color: var(--riga); overflow: visible; font-weight: 400; line-height: 1; }
 .carta.ferma .pfp .cart.marca { display: block; --m: 9px; bottom: -7px; }
+/* Il segno dentro il cartellino non prende il filtro delle foto profilo. */
+.pfp .cart .marchio img, .pfp.rotta .cart .marchio:not(.rotta) img { display: block; filter: none; object-fit: contain; width: var(--m, 14px); height: var(--m, 14px); }
+html.light .pfp .cart .marchio.m-grok img { filter: invert(1); }
 .legenda button .marchio { --m: 13px; margin-right: -1px; }
 .stat .marchio { --m: 13px; }
 .tab-n b.sale { animation: sale 0.7s cubic-bezier(0.16, 1, 0.3, 1); }
@@ -769,6 +782,106 @@ details.nota p { margin-top: 6px; font-size: 11.5px; color: var(--testo2); }
 
 /* --- Testo che era «spento»: ora è una nota leggibile --- */
 .fredda, .manca, .breve-numeri b, .conto-coda.zero b { color: var(--tenue); }
+
+/* --- La sandbox degli audit (0.7.6) ---
+   Chi sta eseguendo codice di terzi porta un lucchetto, nell'Office entra nella stanza recintata, e nel
+   tabellone compare «N in sandbox». Menta per quello che si preme, rosso solo per i tentativi bloccati.
+   Le animazioni sono solo opacità e scala; con prefers-reduced-motion non c'è nessun lampo: cambia il numero. */
+.lucch-i { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: square; overflow: visible; }
+.lucch-i .p { fill: currentColor; stroke: none; }
+[data-blocchi] { position: relative; }
+/* Il lampo: un velo rosso che si spegne, e il numero che torna alla sua misura. */
+:not(rect)[data-blocchi].lampo-r::after { content: ""; position: absolute; inset: -2px; background: var(--rosso); opacity: 0; pointer-events: none; animation: lampo-r 0.9s ease-out; }
+[data-blocchi].lampo-r b, b[data-blocchi].lampo-r { animation: scatto 0.9s cubic-bezier(0.16, 1, 0.3, 1); }
+.lampo-b { fill: var(--rosso); stroke: none; opacity: 0; pointer-events: none; }
+.lampo-b.lampo-r { animation: lampo-r 0.9s ease-out; }
+@keyframes lampo-r { 0% { opacity: 0.62; } 100% { opacity: 0; } }
+@keyframes scatto { 0% { transform: scale(1.3); } 100% { transform: scale(1); } }
+b.blk { color: var(--rosso); font-weight: 700; display: inline-block; }
+/* nel tabellone, accanto agli altri conteggi */
+.tab-sbx { display: inline-flex; flex: none; border-left: 1px solid var(--riga2); }
+.tab-n.sbx { color: var(--menta2); } .tab-n.sbx .lucch-i { color: var(--menta); }
+.tab-n.sbx[aria-pressed="true"] { border-color: var(--menta); color: var(--testo); background: color-mix(in srgb, var(--menta) 12%, transparent); }
+.tab-n.blk { font-weight: 400; color: var(--rosso); }
+/* sulla foto: l'angolo in alto a destra */
+.pfp .lucch { position: absolute; z-index: 2; top: -7px; right: -7px; display: inline-flex; align-items: center; gap: 2px; padding: 2px 3px; background: var(--sup); border: 1px solid var(--menta); color: var(--menta); cursor: pointer; font-size: 9px; line-height: 1; }
+.pfp .lucch .lucch-i { width: 10px; height: 10px; }
+.pfp .lucch.blk { border-color: var(--rosso); }
+.pfp .lucch b { color: var(--rosso); }
+.pfp .lucch:hover { background: var(--menta); color: var(--inchiostro); }
+.chi-r .pfp .lucch { top: -5px; right: -6px; padding: 1px 2px; } .chi-r .pfp .lucch b { display: none; }
+.carta.ferma .pfp .lucch b { display: none; }
+/* scritto: «in sandbox · 3 blocked» */
+.in-sbx { display: flex; align-items: center; gap: 6px; max-width: 100%; margin-top: 4px; padding: 1px 6px; border: 1px dashed var(--menta2); color: var(--menta); font-size: 11px; text-align: left; }
+.in-sbx:hover { border-style: solid; background: color-mix(in srgb, var(--menta) 10%, transparent); }
+.in-sbx .muto { min-width: 0; }
+.scrivanie li > .in-sbx { margin-top: 6px; }
+/* nell'Office: la stanza recintata */
+.stanza-m.recinto { cursor: pointer; }
+.stanza-m.recinto .muro { stroke: var(--menta2); stroke-width: 1.5; }
+.stanza-m.recinto.viva .muro { stroke: var(--menta); }
+.stanza-m.recinto .rete { fill: none; stroke: var(--menta2); stroke-width: 1; stroke-dasharray: 2 3; pointer-events: none; }
+.stanza-m.recinto .lucch-i { color: var(--menta2); stroke-width: 2.6; }
+.stanza-m.recinto.viva .lucch-i { color: var(--menta); }
+.stanza-m.recinto:hover .muro, .stanza-m.recinto.scelta .muro { stroke: var(--testo); }
+.stanza-m.recinto:focus-visible { outline: 1.5px solid var(--testo); outline-offset: 2px; }
+.conta-stanza .blk { fill: var(--rosso); font-weight: 700; }
+.finita-m { font: 400 8.5px var(--mono); fill: var(--tenue); cursor: pointer; }
+.finita-m .va { fill: var(--menta2); } .finita-m:hover { fill: var(--testo); }
+.avatar .lucch-m { cursor: pointer; }
+.avatar .lucch-m > rect:first-child { fill: var(--sup); stroke: var(--menta); stroke-width: 1; }
+.avatar .lucch-m.blk > rect:first-child { stroke: var(--rosso); }
+.avatar .lucch-m .lucch-i { color: var(--menta); stroke-width: 3; }
+.avatar .lucch-m:hover > rect:first-child { fill: var(--menta); } .avatar .lucch-m:hover .lucch-i { color: var(--inchiostro); }
+.avatar.entra-s { animation: entra-s 0.7s cubic-bezier(0.16, 1, 0.3, 1) both; transform-origin: 50% 50%; }
+@keyframes entra-s { from { opacity: 0; transform: scale(0.55); } }
+.pip-l.rete { background: none; border: 1px dashed var(--menta); outline: 1px solid var(--menta2); outline-offset: 1px; }
+.stanza.recinto { border: 1px solid var(--menta2); outline: 1px dashed var(--menta2); outline-offset: -5px; padding: 14px 13px 12px; }
+.stanza.recinto legend .t { display: inline-flex; align-items: center; gap: 6px; color: var(--menta); }
+/* le prove, una per riga */
+.prove, .prove-altre { display: grid; gap: 2px; }
+.prova-r { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "i n s b" "i f f f"; gap: 0 8px; align-items: baseline; width: 100%; padding: 3px 5px; border: 1px solid transparent; text-align: left; color: var(--menta); }
+.prova-r .lucch-i { grid-area: i; align-self: center; }
+.prova-r .nome { grid-area: n; color: var(--testo); font-weight: 700; }
+.prova-r .s { grid-area: s; font-size: 11px; color: var(--testo2); white-space: nowrap; }
+.prova-r .blk { grid-area: b; font-size: 11px; }
+.prova-r .fa { grid-area: f; font-size: 11px; color: var(--tenue); }
+.prova-r.finita { color: var(--menta2); } .prova-r.finita .nome { font-weight: 400; }
+.prova-r:hover { border-color: var(--riga); background: var(--pan2); }
+.prova-r[aria-pressed="true"] { border-color: var(--menta2); }
+/* la scheda di una prova: sotto ogni vista, attaccata al fondo come quella di un agente */
+.prova:empty { display: none; }
+.prova { position: sticky; bottom: 34px; z-index: 5; width: 100%; max-width: 1240px; margin: 0 auto; padding: 0 12px 4px; }
+.scheda-prova { background: var(--fumetto); padding: 0; box-shadow: 0 -10px 26px #000a; }
+html.light .scheda-prova { box-shadow: 0 -8px 22px #10231c22; }
+.scheda-prova.acceso { box-shadow: 0 0 0 1px var(--menta) inset, 0 -10px 26px #000a; }
+html.light .scheda-prova.acceso { box-shadow: 0 0 0 1px var(--menta) inset, 0 -8px 22px #10231c22; }
+.prova-corpo { display: grid; gap: 8px; padding: 14px 12px 10px; max-height: min(64vh, 560px); overflow: auto; }
+.scheda-prova .chiudi { position: absolute; top: 6px; right: 8px; color: var(--tenue); padding: 2px 5px; }
+.scheda-prova .chiudi:hover { color: var(--testo); }
+.prova-t { display: flex; align-items: baseline; gap: 4px 9px; flex-wrap: wrap; padding-right: 24px; color: var(--menta); }
+.prova-t .lucch-i { align-self: center; width: 14px; height: 14px; }
+.prova-t .nome { font-size: 15px; font-weight: 700; color: var(--testo); min-width: 0; }
+.prova-t .s { font-size: 11px; color: var(--testo2); }
+.prova-t .blk { font-size: 12.5px; margin-left: auto; padding: 0 5px; border: 1px solid var(--rosso); }
+.prova-t .blk.zero { color: var(--tenue); border-color: var(--riga); font-weight: 400; }
+.prova-chi { font-size: 11px; margin-top: -4px; }
+.prova-dati .lunga { align-items: flex-start; }
+.prova-dati .lunga .v { white-space: normal; overflow-wrap: anywhere; text-align: right; }
+.prova-dati .v b { color: var(--testo); }
+.reg-n { font-size: 11px; }
+.reg-t { display: flex; gap: 8px; align-items: baseline; font-size: 11px; color: var(--testo); padding-top: 6px; border-top: 1px solid var(--riga2); }
+.reg-t .muto { min-width: 0; }
+.reg { font: 11px/1.5 var(--mono); color: var(--testo2); background: var(--bg); border: 1px solid var(--riga2); padding: 7px 9px; max-height: 42vh; overflow: auto; white-space: pre; tab-size: 2; }
+.reg .sez { color: var(--menta); font-weight: 700; } .reg .no { color: var(--rosso); }
+.reg:focus-visible { outline: 1.5px solid var(--testo); outline-offset: 1px; }
+.prove-altre { padding-top: 6px; border-top: 1px solid var(--riga2); }
+@container app (max-width: 520px) {
+  /* Nel pannello stretto «N in sandbox · N blocked» va a capo, sotto gli altri conteggi, per intero. */
+  .tab-riga.con-sbx { flex-wrap: wrap; row-gap: 3px; }
+  .tab-riga.con-sbx .tab-sbx { flex-basis: 100%; border-left: 0; }
+  .tab-riga.con-sbx .tab-sbx .tab-n:first-child { padding-left: 2px; }
+}
 
 /* Con cinque viste, nel pannello stretto il numero resta solo dove c'è da guardare. */
 @container app (max-width: 460px) {

@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process'
 import { watch } from 'node:fs'
 import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { avatarDi, type CliGrezza, type FotoBot, type FotoSua } from './norma'
+import { avatarDi, type CliGrezza, type FotoBot, type FotoSua, type StatoLetto } from './norma'
 
 /** Gli unici comandi che il plugin lancia. `{bot}` è l'id di un bot preso da `bot list`: il nome può cambiare e portare un'emoji, l'id no. */
 export const COMANDI = {
@@ -50,8 +50,26 @@ const SVG_VIETATO = /<script|<foreignObject|\son[a-z]+\s*=|href\s*=\s*["'](?!#)|
 /** Una foto più grande non viene letta. */
 export const MASSIMO_PFP = 1024 * 1024
 
+/**
+ * La sandbox degli audit, se su questa macchina c'è: `attive/<id>.json` per ogni prova in corso,
+ * `registri/<…>.log` per quelle finite (formato nel README, «The audit sandbox»). Per la Regia è sola
+ * lettura: qui non si scrive, non si cancella e non si lancia niente. Il percorso è fisso e non è
+ * un'impostazione: un'impostazione nuova farebbe chiedere di nuovo l'approvazione a chi ha già il plugin.
+ * Se la cartella non c'è, non si legge e non si guarda nient'altro.
+ */
+export const SANDBOX = '~/orca/sandbox'
+/** Un file di stato è piccolo (mezzo kB); uno più grande non è un file di stato. */
+export const MASSIMO_STATO = 64 * 1024
+/** Un registro ha le sezioni già tagliate da sandbox.sh; oltre questa misura non viene letto. */
+export const MASSIMO_REGISTRO = 512 * 1024
+const MASSIMO_PROVE = 40
+const NOME_STATO = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}\.json$/
+const NOME_REGISTRO = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.log$/
+
 export type Dipendenze = {
   casa: string
+  /** Quel processo c'è ancora? Serve a scartare il file di stato rimasto dopo un `kill -9`. Non manda segnali. */
+  vivo: (pid: number) => boolean
   adesso: () => number
   /** Lancia `orca <argomenti> --json` e restituisce il testo stampato. */
   lancia: (eseguibile: string, argomenti: string[]) => Promise<string>
@@ -75,6 +93,16 @@ export type Dipendenze = {
 export function dipendenzeVere(): Dipendenze {
   return {
     casa: homedir(),
+    vivo: (pid) => {
+      try {
+        // Il segnale 0 non arriva al processo: dice solo se esiste.
+        process.kill(pid, 0)
+        return true
+      } catch (e) {
+        // EPERM: esiste, ma è di un altro utente.
+        return (e as NodeJS.ErrnoException)?.code === 'EPERM'
+      }
+    },
     adesso: () => Date.now(),
     lancia: (eseguibile, argomenti) =>
       new Promise((ok, no) => {
@@ -352,4 +380,56 @@ export async function leggiFoto(dip: Dipendenze, cartella = CASE_BOT, prima: Fot
     foto.push({ id: String(bot.id ?? ''), nome: String(bot.name ?? casa), casa, avatar, sua })
   }
   return foto
+}
+
+/**
+ * I file di stato delle prove in corso, com'è scritto ognuno: `attive/<id>.json` e basta (i `.json.tmp`
+ * della scrittura atomica non sono file di stato). Solo file normali, non collegamenti, fino a 64 kB.
+ * Null: la sandbox non c'è su questa macchina. Vuoto: c'è, e non gira niente (o `attive/` non è ancora nata).
+ * Un file che sparisce tra l'elenco e la lettura è una prova appena finita: si salta.
+ */
+export async function leggiSandbox(dip: Dipendenze, cartella = SANDBOX): Promise<StatoLetto[] | null> {
+  const radice = espandi(cartella, dip.casa)
+  try {
+    await dip.elenca(radice)
+  } catch {
+    return null
+  }
+  let nomi: string[]
+  try {
+    nomi = (await dip.elenca(`${radice}/attive`)).filter((n) => NOME_STATO.test(n)).sort().slice(-MASSIMO_PROVE)
+  } catch {
+    return []
+  }
+  const letti: StatoLetto[] = []
+  for (const nome of nomi) {
+    try {
+      const percorso = `${radice}/attive/${nome}`
+      const s = await dip.stato(percorso)
+      if (!s.file || s.byte < 2 || s.byte > MASSIMO_STATO) continue
+      letti.push({ nome, testo: new TextDecoder().decode(await dip.leggiByte(percorso, MASSIMO_STATO)) })
+    } catch {
+      // Sparito nel frattempo, o illeggibile.
+    }
+  }
+  return letti
+}
+
+/**
+ * Il registro di una prova: `nome` è solo un nome di file (`<data>-<nome>.log`), cercato dentro
+ * `registri/` e in nessun altro posto. Deve essere un file normale, non un collegamento, col percorso vero
+ * proprio lì dentro, fino a 512 kB. Null: non c'è (ancora), o non è leggibile così.
+ */
+export async function leggiRegistro(dip: Dipendenze, nome: string, cartella = SANDBOX): Promise<string | null> {
+  if (!NOME_REGISTRO.test(nome)) return null
+  try {
+    const radice = await dip.vero(`${espandi(cartella, dip.casa)}/registri`)
+    const percorso = `${radice}/${nome}`
+    const s = await dip.stato(percorso)
+    if (!s.file || s.byte > MASSIMO_REGISTRO) return null
+    if ((await dip.vero(percorso)) !== percorso) return null
+    return new TextDecoder().decode(await dip.leggiByte(percorso, MASSIMO_REGISTRO))
+  } catch {
+    return null
+  }
 }

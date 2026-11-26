@@ -5,10 +5,10 @@
 // Sola lettura, con due eccezioni volute: portare Orca su una scheda o un terminale
 // (workspace:write) e mostrare un avviso (notifications:show). Non scrive a bot, agenti o terminali.
 import type { OrcaWorkerApi } from 'orca/worker'
-import { CASE_BOT, comandiARotazione, dipendenzeVere, espandi, FILE_DI_CASA, leggiCliAGiri, leggiFoto, leggiMotore, memoriaCli, type Dipendenze } from './fonti'
-import { attesaNuove, componi, fotoDi, normaCli, normaMotore, testoAvviso, voceBarra, type FotoBot, type ParteCli } from './norma'
+import { CASE_BOT, comandiARotazione, dipendenzeVere, espandi, FILE_DI_CASA, leggiCliAGiri, leggiFoto, leggiMotore, leggiRegistro, leggiSandbox, memoriaCli, SANDBOX, type Dipendenze } from './fonti'
+import { attesaNuove, componi, fotoDi, normaCli, normaMotore, normaSandbox, proveFinite, testoAvviso, voceBarra, type FotoBot, type ParteCli } from './norma'
 import { impostazioniDa, NOME, type Impostazioni } from './opzioni'
-import type { Bersaglio, Quadro } from './protocol'
+import type { Bersaglio, Prova, Quadro } from './protocol'
 
 /** L'id della voce nella barra di stato e quello del comando, come nel manifest. */
 const VOCE = 'status'
@@ -49,6 +49,8 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
   let workspaces: any[] | null = null
   // Le foto profilo dei bot: restano le ultime lette se una lettura fallisce.
   let foto: FotoBot[] = []
+  // La sandbox degli audit: le prove vive e quelle appena finite. Null: su questa macchina non c'è.
+  let sandbox: { prove: Prova[] } | null = null
   let barra = ''
   let chiaviAttese: string | null = null
   // Le cartelle tenute d'occhio, per percorso.
@@ -97,6 +99,9 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
         chiedi(false)
       })
     }
+    // I file di stato della sandbox cambiano ogni secondo mentre una prova gira: si rileggono solo i file,
+    // senza la CLI. La cartella si guarda solo dove la sandbox c'è.
+    if (sandbox) voluti.set(`${espandi(SANDBOX, dip.casa)}/attive`, (nome) => (nome === null || nome.endsWith('.json')) && chiedi(false))
     for (const [percorso, occhio] of occhi) {
       if (voluti.has(percorso)) continue
       occhio.chiudi()
@@ -155,6 +160,18 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
       // Le case dei bot non si leggono: restano le foto di prima, o le icone disegnate.
     }
 
+    // La sandbox: i file di stato delle prove in corso, in sola lettura. Una prova che c'era e non c'è più
+    // è finita: resta un quarto d'ora, per poterne aprire il registro.
+    try {
+      const letti = await leggiSandbox(dip)
+      if (letti) {
+        const vive = normaSandbox(letti, dip.vivo, dip.casa)
+        sandbox = { prove: [...vive, ...proveFinite(sandbox?.prove ?? [], vive, adesso)] }
+      } else sandbox = null
+    } catch {
+      // Una lettura andata storta non fa «finire» le prove: resta quello che si sapeva.
+    }
+
     // Il file di stato è facoltativo: senza un percorso nelle impostazioni la fonte è spenta, e non si
     // cerca, non si legge e non si tiene d'occhio nessun file.
     const percorsoStato = imp.fileStato
@@ -180,7 +197,7 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
       }
     }
 
-    const nuovo = componi({ adesso, cli, motore, motoreSpento: !percorsoStato, api: { workspaces }, botInArrivo: imp.botAttesi, foto, casa: dip.casa, opzioni: imp, fermo: !imp.animazioni })
+    const nuovo = componi({ adesso, cli, motore, motoreSpento: !percorsoStato, api: { workspaces }, botInArrivo: imp.botAttesi, foto, casa: dip.casa, opzioni: imp, fermo: !imp.animazioni, sandbox })
     quadro = nuovo
     if (!viva) return nuovo
 
@@ -313,6 +330,16 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
     const bot = id ? quadro?.bot.find((b) => b.id === id) : undefined
     const sua = bot ? fotoDi(foto, bot)?.sua : null
     return sua ? { impronta: sua.impronta, url: sua.url } : null
+  })
+
+  // Il registro di una prova della sandbox. Il pannello dà solo l'id di una prova del quadro: il nome del
+  // file è quello letto dal suo file di stato, e si cerca soltanto nella cartella dei registri.
+  orca.panels.handle('regia.registro', async (chiesta) => {
+    const id = typeof chiesta?.prova === 'string' ? chiesta.prova : ''
+    const prova = id ? sandbox?.prove.find((p) => p.id === id) : undefined
+    if (!prova) return { stato: 'sconosciuta' as const, nome: '', testo: '' }
+    const testo = prova.registro ? await leggiRegistro(dip, prova.registro) : null
+    return testo === null ? { stato: 'manca' as const, nome: prova.registro, testo: '' } : { stato: 'pronto' as const, nome: prova.registro, testo }
   })
 
   // Il comando della palette e il clic sulla voce di stato: fanno comparire la barra destra, dove
