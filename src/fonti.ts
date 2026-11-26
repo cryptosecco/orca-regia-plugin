@@ -8,7 +8,7 @@ import { execFile } from 'node:child_process'
 import { watch } from 'node:fs'
 import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { avatarDi, type CliGrezza, type FotoBot, type FotoSua, type StatoLetto } from './norma'
+import { avatarDi, botUnici, type CliGrezza, type FotoBot, type FotoSua, type StatoLetto } from './norma'
 
 /** Gli unici comandi che il plugin lancia. `{bot}` è l'id di un bot preso da `bot list`: il nome può cambiare e portare un'emoji, l'id no. */
 export const COMANDI = {
@@ -197,7 +197,8 @@ export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: 
   let buono = ''
   for (const e of eseguibili) {
     try {
-      bots = (await comando(dip, [e], 'bot'))?.bots ?? []
+      // Un bot una volta sola, per id: un server collegato che è lo stesso Orca ridà gli stessi bot.
+      bots = botUnici((await comando(dip, [e], 'bot'))?.bots ?? [])
       buono = e
       errore = null
       break

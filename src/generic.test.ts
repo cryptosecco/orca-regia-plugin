@@ -508,3 +508,89 @@ test('CLI marks: Codex and Grok CLI show their own mark; Claude Code and Gemini 
     assert.ok(m.includes('class="marchio neutro"') && m.includes(`<span class="nome-m">${nome}</span>`) && !m.includes('<img'), id)
   }
 })
+
+// ---------- a bot counts once (0.8.4) ----------
+// Orca lists every chat a bot has ever had in its home, old and finished ones included. With about ten
+// bots the Office showed 65 avatars in the bots' room and counted 74 agents. Here eight invented bots have
+// eight chats each, one of them works in two projects that both have a workspace called «main», and the
+// same bot comes back twice from `bot list`: each stays one, known by its id.
+
+const idOf = (n: number): string => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`
+function eightByEight() {
+  const bots = Array.from({ length: 8 }, (_, i) => ({ id: idOf(i + 1), name: 'Bot' + (i + 1), agent: 'claude', paused: false, specialty: '' }))
+  const chat = (n: number, k: number) => ({
+    address: `orca_session_id:b${n}-c${k}`,
+    state: n === 1 && k === 5 ? 'working' : n === 3 && k === 6 ? 'blocked' : 'done',
+    agentType: 'claude',
+    conversationName: k === 0 ? 'Bot' + n : `Bot${n}: chat ${k}`,
+    stateStartedAt: NOW - (k + 1) * 60_000
+  })
+  const homes = bots.map((b, i) => ({
+    workspaceKind: 'folder-workspace', worktreeId: 'folder:' + b.id, repo: 'Bots', displayName: b.name, path: `${HOME}/.orca/bots/bot${i + 1}`, branch: '', status: 'inactive', bot: b.name, botHome: true,
+    agents: [...Array.from({ length: 8 }, (_, k) => chat(i + 1, k)), ...(i === 1 ? [{ address: 'term_wb2', state: 'working', agentType: 'codex', taskTitle: 'Deploy the bot', stateStartedAt: NOW - 5000 }] : [])]
+  }))
+  const projects = [
+    { workspaceKind: 'git', worktreeId: 'repo-alpha::/work/alpha', repo: 'alpha', displayName: 'main', path: HOME + '/work/alpha', bot: 'Bot2', agents: [{ address: 'term_alpha', state: 'working', agentType: 'claude', taskTitle: 'Redo the page', stateStartedAt: NOW - 9000 }] },
+    { workspaceKind: 'git', worktreeId: 'repo-beta::/work/beta', repo: 'beta', displayName: 'main', path: HOME + '/work/beta', bot: null, agents: [{ address: 'term_beta', state: 'done', agentType: 'claude', conversationName: 'beta', stateStartedAt: NOW - 90_000 }] }
+  ]
+  const perBot = Object.fromEntries(bots.map((b) => [b.id, { item: { items: [] }, chat: { chats: [] }, lavori: { workspaces: b.name === 'Bot2' ? [{ id: 'repo-alpha::/work/alpha', name: 'main' }] : [] } }]))
+  return { bots, perBot, schede: [...homes, ...projects], automazioni: [], posta: [], operai: [] }
+}
+const eightQuadro = () => componi({ adesso: NOW, cli: { parte: normaCli(eightByEight(), HOME), quando: NOW, errore: null }, motore: { parte: null, errore: null }, motoreSpento: true, api: { workspaces: null }, botInArrivo: [], casa: HOME, opzioni: NEUTRE })
+
+test('eight bots with eight chats each are eight avatars in the Office, and every count says the same', async () => {
+  const V = await import('../panel/viste.js')
+  const q = eightQuadro()
+  const bots = q.progetti.flatMap((p) => p.agenti.filter((a) => a.bot).map((a) => ({ ...a, room: p.nome })))
+  // One avatar per bot, named after the bot (not the chat), in the bots' room.
+  assert.deepEqual(bots.map((a) => a.nome).sort(), ['Bot1', 'Bot2', 'Bot3', 'Bot4', 'Bot5', 'Bot6', 'Bot7', 'Bot8'])
+  assert.ok(bots.every((a) => a.room === 'Bots'))
+  // The state is the one of its most active chat, and a click opens that chat; with all of them idle, the latest.
+  const of = (n: string) => bots.find((a) => a.nome === n)!
+  assert.deepEqual([of('Bot1').stato, of('Bot3').stato, of('Bot8').stato], ['al lavoro', 'aspetta te', 'fermo'])
+  assert.deepEqual([of('Bot1').terminale, of('Bot8').terminale], ['orca_session_id:b1-c5', 'orca_session_id:b8-c0'])
+  // A worker with a task in a bot's home stays an agent.
+  assert.deepEqual(q.progetti.find((p) => p.nome === 'Bots')!.agenti.filter((a) => !a.bot).map((a) => [a.nome, a.ruolo]), [['Deploy the bot', 'worker']])
+  // 8 bots, the worker in a home and the two project agents: 11, on the Office tab, in the scoreboard, at the bottom.
+  const tabs = Object.fromEntries(V.schede(q).map(([id, , n]: [string, string, number]) => [id, n]))
+  assert.deepEqual([tabs.panoramica, tabs.ufficio, q.conteggi.agenti, q.conteggi.lavoro, q.conteggi.aspettano], [8, 11, 11, 3, 1])
+  const c = V.contiTabellone(q)
+  assert.deepEqual([c.agenti, c.lavoro, c.aspettano], [11, 3, 1])
+  assert.ok(V.ufficio(q, NOW, {}).includes('Office map: 3 rooms, 11 agents.'))
+  // No question is lost: the waiting chat of Bot3 is still among what waits on the person.
+  assert.deepEqual(q.attese.filter((a) => a.origine === 'agente').map((a) => a.chi), ['Bot3'])
+})
+
+test('a bot working in two projects gets only its own workspace, found by id, not every workspace with the same name', () => {
+  const q = eightQuadro()
+  const bot2 = q.bot.find((b) => b.nome === 'Bot2')!
+  assert.deepEqual(bot2.worker.map((s) => s.progetto), ['alpha'])
+  assert.deepEqual(bot2.figli?.map((f) => f.nome), ['Redo the page'])
+  assert.deepEqual(q.progetti.find((p) => p.nome === 'beta')!.agenti.map((a) => [a.nome, a.bot]), [['beta', false]])
+})
+
+test('the same bot twice in `bot list` (same id, once from a paired server) is one bot', () => {
+  const g = eightByEight()
+  const twice = { ...g, bots: [{ ...g.bots[0], server: { name: 'home-mac', on: 'home-mac' } }, ...g.bots] }
+  const bots = normaCli(twice, HOME).bot
+  assert.equal(bots.length, 8)
+  // The copy from this computer stays, even when the server's copy comes first.
+  assert.equal(bots.filter((b) => b.id === idOf(1)).length, 1)
+})
+
+test('with a state file: an agent that touched a bot\'s files from a project stays an agent, and many sessions of a bot are one avatar', () => {
+  const s = (nome: string, cartella: string, stato: string, tocca: string[] = [], terminale: string | null = null) => ({ nome, stato, dettaglio: '', fermoDaSecondi: 30, modello: 'opus', sforzo: 'high', contesto: 1000, finestra: 1_000_000, cacheScadeTraSecondi: 100, tipo: 'interattiva', cartella, terminaleOrca: terminale, domanda: '', tocca, subAgentiAttivi: stato === 'al lavoro' ? ['Explore: x'] : [], subAgentiConclusi: 1 })
+  const state = { aggiornato: new Date(NOW - 2000).toISOString(), conteggi: {}, coda: [], incroci: [], progetti: [
+    { nome: 'alpha', schede: ['x'], agenti: [s('alpha-x', '~/work/alpha', 'al lavoro', ['~/.orca/bots/bot2/SOUL.md'], 'term_x')] },
+    { nome: 'Bots', schede: ['Bot1'], agenti: [s('Home', '~/.orca/bots/bot1', 'fermo'), s('Chat 2', '~/.orca/bots/bot1', 'al lavoro'), s('Chat 3', '~/.orca/bots/bot1', 'errore')] }
+  ] }
+  const known = [{ nome: 'Bot1', casa: 'bot1' }, { nome: 'Bot2', casa: 'bot2' }]
+  const motore = normaMotore(state, known, HOME)
+  assert.deepEqual(motore.progetti.flatMap((p) => p.agenti).map((a) => [a.nome, a.bot]), [['alpha-x', false], ['Bot1', true], ['Bot1', true], ['Bot1', true]])
+  const q = componi({ adesso: NOW, cli: { parte: null, quando: null, errore: 'no CLI' }, motore: { parte: motore, errore: null }, api: { workspaces: null }, botInArrivo: [], casa: HOME, opzioni: NEUTRE })
+  // Without the CLI the bots come from the state file: Bot1 once, not once per session.
+  assert.deepEqual(q.bot.map((b) => b.nome), ['Bot1'])
+  // One avatar, working (the working chat counts more than an old one in error), with the sub-agents of all its sessions.
+  assert.deepEqual(q.progetti.flatMap((p) => p.agenti.filter((a) => a.bot)).map((a) => [a.nome, a.stato, a.subAttivi, a.subConclusi]), [['Bot1', 'al lavoro', 1, 3]])
+  assert.equal(q.conteggi.agenti, 2)
+})

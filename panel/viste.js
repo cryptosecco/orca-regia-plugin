@@ -1344,8 +1344,11 @@ export function ufficio(q, ora, vista = {}) {
 // ---------- Office: la mappa dall'alto ----------
 // Disegno originale, a mano, nello stile del pannello: stanze a bordo sottile col cartellino, pavimento a
 // puntini, scrivanie e divano fatti di rettangoli. Tutto SVG, in due tagli come il diagramma.
-/** Chi è un agente da un quadro all'altro: il suo terminale, oppure stanza, nome e cartella. */
-export const chiaveAgente = (a, progetto) => a.terminale || `${progetto}/${a.nome}/${a.cartella || ''}`
+/**
+ * Chi è un agente da un quadro all'altro: il suo terminale, oppure stanza, nome e cartella. Un bot è un
+ * avatar solo, che porta la sua chat più attiva: la chiave è il bot, così non esce e rientra quando cambia chat.
+ */
+export const chiaveAgente = (a, progetto) => (a.bot ? `bot:${progetto}/${a.nome}` : a.terminale || `${progetto}/${a.nome}/${a.cartella || ''}`)
 const SVEGLIO = (a) => a.stato === 'al lavoro' || a.stato === 'aspetta te' || a.stato === 'errore'
 const POSTO = { w: 50, h: 58, lato: 26 }, DIVANO = { w: 21, lato: 17 }
 

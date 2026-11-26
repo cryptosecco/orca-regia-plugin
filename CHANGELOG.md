@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.4 — 2026-11-26
+
+- Fixed: a bot counted once per chat. Orca lists every chat a bot has ever had in its home, old and finished ones included, and the Office made an avatar of each: with about ten bots the bots' room could show 65 avatars and the Office 74 agents. Now each bot is one avatar, known by its id, with the state of its most active chat (waiting on you, then working, then in error, then the latest) and a click opens that chat. The Office tab, the scoreboard, the "all" and "idle" counts and the status bar count the same avatars. Workers a bot started stay agents, one each. A chat that waits on you is still among what waits on you.
+- Fixed: a bot's workspaces are matched by id, not by name, so a bot with a workspace called "main" no longer gets every other project's "main" and its agents.
+- Fixed: the same bot listed twice by `orca bot list` (once from a paired server that is the same Orca) is one bot. With the optional state file, an agent that edits a bot's files from a project stays an agent of that project.
+- Same capabilities and settings as 0.8.3: no new approval.
+
 ## 0.8.3 — 2026-11-26
 
 - CLI marks: the scoreboard and the Office show the `>_` of Codex and the mark of Grok CLI instead of a plain shape. Claude Code and Gemini CLI keep a plain shape with the name written: their owners' trademark rules ask for permission first. Details and attributions in NOTICE.md.

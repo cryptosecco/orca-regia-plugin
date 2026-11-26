@@ -248,13 +248,31 @@ export type ParteCli = {
   operai?: Operaio[]
 }
 
+/**
+ * Un bot una volta sola, per id. `bot list` mette in fila i bot di questo computer e quelli dei server
+ * collegati (con `server`): un server che è lo stesso Orca ridà gli stessi bot, con lo stesso id. Resta la
+ * copia di questo computer, o la prima che Orca elenca.
+ */
+export function botUnici(bots: Grezzo[]): Grezzo[] {
+  const per = new Map<string, Grezzo>()
+  for (const b of bots ?? []) {
+    const id = String(b?.id ?? '')
+    const gia = per.get(id)
+    if (!gia || (gia.server && !b.server)) per.set(id, b)
+  }
+  return [...per.values()]
+}
+
 export function normaCli(grezza: CliGrezza, casa = ''): ParteCli {
   const schede = normaSchede(grezza.schede, casa)
   const automazioni = normaAutomazioni(grezza.automazioni)
   const chatDi = new Map<string, string>()
   const consegnaDi = new Map<string, { bot: string | null; titolo: string }>()
+  // Le schede per id (`worktreeId`, lo stesso che dà `bot work list`): due progetti possono avere una scheda con lo stesso nome («main»).
+  const idScheda = (grezza.schede ?? []).map((w) => String(w?.worktreeId ?? ''))
+  const ids = new Set(idScheda.filter(Boolean))
 
-  const bot: Bot[] = (grezza.bots ?? []).map((b) => {
+  const bot: Bot[] = botUnici(grezza.bots ?? []).map((b) => {
     const nome = String(b.name)
     const dati = grezza.perBot[String(b.id)] ?? {}
     const chat: Grezzo[] = dati.chat?.chats ?? []
@@ -282,7 +300,13 @@ export function normaCli(grezza: CliGrezza, casa = ''): ParteCli {
         nato: ms(i.createdAt)
       }
     })
-    const spazi = new Set((dati.lavori?.workspaces ?? []).map((w: Grezzo) => String(w.name)))
+    // Gli spazi di lavoro del bot: per id quando Orca dà gli id; per nome solo se non li dà (una CLI più vecchia).
+    const spaziId = new Set<string>(), spaziNome = new Set<string>()
+    for (const w of dati.lavori?.workspaces ?? []) {
+      if (w?.id && ids.size) spaziId.add(String(w.id))
+      else spaziNome.add(String(w?.name))
+    }
+    const suo = (s: Scheda, i: number): boolean => s.bot === nome || spaziId.has(idScheda[i]) || spaziNome.has(s.nome)
     const casaBot = schede.find((s) => s.progetto === 'Bots' && (s.bot === nome || s.nome === nome))
     const sessione = casaBot?.agenti[0]
     return {
@@ -302,7 +326,7 @@ export function normaCli(grezza: CliGrezza, casa = ''): ParteCli {
         ultimaRichiesta: primaRiga(c.lastAsked, 130, casa).replace(/\*\*/g, '')
       })),
       item,
-      worker: schede.filter((s) => s.progetto !== 'Bots' && (s.bot === nome || spazi.has(s.nome))),
+      worker: schede.filter((s, i) => s.progetto !== 'Bots' && suo(s, i)),
       automazioni: automazioni.filter((a) => a.botId === b.id)
     }
   })
@@ -421,6 +445,9 @@ export type ParteMotore = {
   conteggi: Record<string, number>
 }
 
+/** La casa di un bot dentro un percorso: `~/.orca/bots/<casa>`. */
+const CASA_BOT = /\.orca\/bots\/([A-Za-z0-9][A-Za-z0-9._-]*)/
+
 /**
  * `bots`: i bot che si conoscono, con la loro casa. Una sessione che lavora in `~/.orca/bots/<casa>`
  * è quel bot, comunque si chiami; di un bot senza casa nota (o dato solo per nome) vale il nome in minuscolo.
@@ -434,7 +461,9 @@ export function normaMotore(stato: Grezzo, bots: (string | { nome: string; casa?
       const tocca: string[] = (a.tocca ?? [])
         .map((t: Grezzo) => corto(typeof t === 'string' ? t : t?.percorso, 70, casa))
         .filter((t: string) => t && !t.startsWith('/private/tmp'))
-      const casaBot = /\.orca\/bots\/([A-Za-z0-9][A-Za-z0-9._-]*)/.exec(String(a.cartella ?? '') + ' ' + tocca.join(' '))
+      // È un bot la sessione che lavora nella sua casa. I file toccati contano solo se la cartella non si sa:
+      // un agente di un progetto che modifica il SOUL.md di un bot resta un agente di quel progetto, non diventa quel bot.
+      const casaBot = a.cartella ? CASA_BOT.exec(String(a.cartella)) : CASA_BOT.exec(tocca.join(' '))
       const nomeBot = casaBot ? perCasa.get(casaBot[1].toLowerCase()) : undefined
       const finestra = Number(a.finestra ?? 0)
       const contesto = typeof a.contesto === 'number' && a.contesto > 0 ? Math.round(a.contesto) : null
@@ -485,17 +514,23 @@ export function normaMotore(stato: Grezzo, bots: (string | { nome: string; casa?
 /** Modello, sforzo, contesto e cache li sa solo il Motore: senza di lui mancano, e si dice. */
 const SENZA_MOTORE = { inSfondo: false, modello: '', sforzo: '', contesto: null, finestra: null, contestoPct: null, cacheScade: null } as const
 
-/** Ufficio senza Motore: dalle schede della CLI. Stati sì, contesto e file toccati no. */
+/**
+ * Ufficio senza Motore: dalle schede della CLI. Stati sì, contesto e file toccati no. Nella casa di un bot
+ * ogni chat è il bot (col suo nome, non col titolo della chat): poi `unAvatarPerBot` ne tiene una. Un
+ * worker con un compito, anche se lavora nella casa di un bot, resta un agente.
+ */
 export function ufficioDaSchede(schede: Scheda[]): Progetto[] {
   const per = new Map<string, Progetto>()
   for (const s of schede) {
     const p = per.get(s.progetto) ?? { nome: s.progetto, schede: [], agenti: [] }
     per.set(s.progetto, p)
     p.schede.push(s.nome)
+    const diBot = s.progetto === 'Bots' || casaDa(s.percorso) !== null
     for (const g of s.agenti) {
+      const bot = diBot && !g.worker
       p.agenti.push({
-        nome: g.titolo || s.nome,
-        bot: s.progetto === 'Bots',
+        nome: (bot && s.bot) || g.titolo || s.nome,
+        bot,
         stato: g.stato === 'finito' ? 'fermo' : g.stato,
         dettaglio: g.cosaFa,
         daSecondi: null,
@@ -515,6 +550,38 @@ export function ufficioDaSchede(schede: Scheda[]): Progetto[] {
     }
   }
   return [...per.values()]
+}
+
+/**
+ * Quale sessione di un bot si vede nell'Office, la sua chat più attiva: prima quella che aspetta una
+ * risposta, poi quella al lavoro, poi in errore (una chat vecchia finita male non copre quella che lavora), poi le altre.
+ */
+const PESO_SESSIONE: Record<string, number> = { 'aspetta te': 0, 'al lavoro': 1, errore: 2 }
+
+/**
+ * Nell'Office un bot è un avatar solo, comunque tante chat abbia: Orca elenca nella sua casa ogni chat, anche
+ * le vecchie e quelle finite, e con una decina di bot l'Office arrivava a 65 avatar nella stanza dei bot e
+ * a 74 agenti. Il bot si riconosce dall'id (per casa o per nome tra i bot noti); l'avatar è la sua chat più
+ * attiva (vedi `PESO_SESSIONE`, a parità la più recente), nella stanza di quella chat, coi sub-agenti di
+ * tutte. I worker dei bot non sono bot: restano agenti, uno per uno. Le attese, i figli e gli incroci si
+ * calcolano prima, su tutte le sessioni, così nessuna domanda si perde.
+ */
+export function unAvatarPerBot(progetti: Progetto[], bot: Bot[], adesso = Date.now()): Progetto[] {
+  const chi = (a: Agente): string => {
+    const casa = casaDa(a.cartella)
+    const b = (casa && bot.find((x) => x.casa === casa)) || bot.find((x) => x.nome.toLowerCase() === a.nome.toLowerCase())
+    return b ? 'id:' + b.id : 'nome:' + (casa ?? a.nome.toLowerCase())
+  }
+  const quando = (a: Agente): number => a.da ?? (a.daSecondi !== null ? adesso - a.daSecondi * 1000 : 0)
+  const gruppi = new Map<string, Agente[]>()
+  for (const p of progetti) for (const a of p.agenti) if (a.bot) gruppi.set(chi(a), [...(gruppi.get(chi(a)) ?? []), a])
+  const resta = new Map<Agente, Agente>()
+  for (const sessioni of gruppi.values()) {
+    const scelta = [...sessioni].sort((x, y) => (PESO_SESSIONE[x.stato] ?? 3) - (PESO_SESSIONE[y.stato] ?? 3) || quando(y) - quando(x))[0]
+    const conclusi = sessioni.filter((a) => a.subConclusi !== null)
+    resta.set(scelta, sessioni.length === 1 ? scelta : { ...scelta, subAttivi: sessioni.reduce((n, a) => n + a.subAttivi, 0), subConclusi: conclusi.length ? conclusi.reduce((n, a) => n + (a.subConclusi ?? 0), 0) : null })
+  }
+  return progetti.map((p) => ({ ...p, agenti: p.agenti.flatMap((a) => (!a.bot ? [a] : resta.has(a) ? [resta.get(a)!] : [])) }))
 }
 
 /**
@@ -982,6 +1049,8 @@ export function componi(x: Ingressi): Quadro {
         automazioni: [],
         soloMotore: true
       }))
+      // Una volta per bot, non una per sessione.
+      .filter((b, i, tutti) => tutti.findIndex((x) => (x.casa ?? x.nome).toLowerCase() === (b.casa ?? b.nome).toLowerCase()) === i)
   }
   // La foto profilo di ogni bot è quella che dice il suo bot.json, come nella barra laterale di Orca:
   // una mascotte, un'emoji o l'immagine caricata. Del file nel quadro va solo l'impronta: l'immagine
@@ -1057,7 +1126,9 @@ export function componi(x: Ingressi): Quadro {
   // Un bot «in arrivo» esce dall'elenco da solo quando esiste: si riconosce dal nome (anche se nel
   // frattempo ha preso un'emoji o altri segni) o dalla cartella della sua casa.
   const veri = new Set(bot.flatMap((b) => [liscio(b.nome), liscio(b.casa ?? '')]).filter(Boolean))
-  const agenti = progetti.flatMap((p) => p.agenti)
+  // L'Office e i suoi conteggi: un avatar per bot. Attese, coda, figli e zone sono già fatti su tutte le sessioni.
+  const ufficio = unAvatarPerBot(progetti, bot, x.adesso)
+  const agenti = ufficio.flatMap((p) => p.agenti)
   return {
     quando: x.adesso,
     fermo: Boolean(x.fermo),
@@ -1082,7 +1153,7 @@ export function componi(x: Ingressi): Quadro {
     automazioni,
     messaggi: cli?.messaggi ?? [],
     schede: cli?.schede ?? [],
-    progetti,
+    progetti: ufficio,
     incroci: motoreVivo ? (motore?.incroci ?? []) : [],
     zone: [...zone.entries()].map(([percorso, chi]) => ({ percorso, agenti: chi }))
   }

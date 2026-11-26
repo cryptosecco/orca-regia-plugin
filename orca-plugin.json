@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "regia",
   "name": "Regia",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "A read-only control room for your Orca bots: what is waiting on you, the queue by priority, who is working on what, and how work flows between bots, workers and pull requests.",
   "author": {
     "name": "cryptosecco"
