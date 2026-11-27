@@ -260,7 +260,8 @@ export type Coda = {
 }
 
 export type Fonti = {
-  cli: { ok: boolean; quando: number | null; errore: string | null }
+  /** `parziale`: la CLI risponde, ma `bot list` no: i bot sono quelli di questo computer (da un comando più rapido) e i server collegati mancano. */
+  cli: { ok: boolean; quando: number | null; errore: string | null; parziale?: { motivo: 'timeout' | 'error'; secondi: number } }
   /**
    * `spento`: il file di stato facoltativo non è stato chiesto. Non è un guasto, e non si legge niente.
    * `ok`: il file è stato aggiornato da meno di un minuto. `ultimi`: è fermo, e nel quadro ci sono i suoi

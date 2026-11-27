@@ -110,7 +110,8 @@ export function fonti(q, ora) {
   const eta = Math.max(0, Math.round((ora - q.quando) / 1000))
   if (eta > 30) righe.push(T.fonti.notUpdating(fa(q.quando, ora)))
   if (!f.cli.ok) righe.push(f.cli.quando ? T.fonti.botsCliStale(fa(f.cli.quando, ora)) : f.motore.spento ? T.fonti.botsCliDown : T.fonti.botsCliOnlyState)
-  return motoreFermo(q, ora) + righe.map((t) => `<span class="fonte guasto">${segno('errore')}<span>${e(t)}</span></span>`).join('')
+  const avvisi = f.cli.ok && f.cli.parziale ? [T.fonti.botsPartial(f.cli.parziale.motivo, f.cli.parziale.secondi)] : []
+  return motoreFermo(q, ora) + righe.map((t) => `<span class="fonte guasto">${segno('errore')}<span>${e(t)}</span></span>`).join('') + avvisi.map((t) => `<span class="fonte avviso">${segno('aspetta')}<span>${e(t)}</span></span>`).join('')
 }
 
 /** Di chi è la coda, a parole e già protetta per l'HTML: «Atlas's queue», oppure «the queue» quando è di tutti i bot. */

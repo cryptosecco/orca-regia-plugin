@@ -74,6 +74,7 @@ export const T = {
   fonti: {
     botsCliStale: (ago) => `Bots: the CLI is not answering, data from ${ago}`,
     botsCliDown: 'Bots: the Orca CLI is not answering',
+    botsPartial: (motivo, secondi) => motivo === 'timeout' ? `Bots: only this computer's. Orca's full bot list, which also asks the paired servers, did not answer in ${secondi} s` : "Bots: only this computer's. Orca's full bot list failed",
     botsCliOnlyState: 'Bots: the CLI is not answering, only what the state file knows',
     notUpdating: (ago) => `Not updating: last data from ${ago}`
   },

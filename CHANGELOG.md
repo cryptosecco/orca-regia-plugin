@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Fixed, on Windows: the worker starts with no `APPDATA` or `LOCALAPPDATA`, so every Orca CLI call came back `runtime_unavailable`; they are put back for the CLI. The CLI is also looked for by its full path (`resources\bin\orca.exe` of the running Orca, then the default install folder), because called as `orca` from the app folder it cannot find its command. Thanks to Simple-YU-268 (#3) for both.
+- Fixed: a paired server that does not answer no longer takes the whole panel down. `orca bot list` also asks every paired server, and when one hangs the call is killed at its deadline, which showed "Bots: the Orca CLI is not answering" and, with nothing in the queue, "Regia · data stalled". Now the bots of this computer come from `orca worktree ps --since 7d --limit 1` (one more read-only command, only when `bot list` fails), an amber line says that only this computer's bots are shown, and the full list is tried again a minute later. A `bot list` killed by its deadline is not tried again with the next executable.
+- Fixed: "data stalled" in the status bar now needs every source to be down. If the CLI does not answer but Orca's own window does, the status bar shows a warning that the queue may be stale.
+- The choices sent to a bot use the same environment as the reads.
+- Same capabilities and settings as 0.8.5: no new approval.
+
 ## 0.8.5 — 2026-11-27
 
 - The options of a question in the Queue are buttons, one per line, with the recommended one marked; an item with several questions gets one group per question, and an option's note shows under its label.
