@@ -3,7 +3,7 @@
 // optional state file, the settings, and what the worker reads and launches.
 import { afterEach, assert, mockHost, mountWorker, test } from 'orca/testing'
 import { BOTS, HOME, demoCli, demoHomes, demoSandbox, demoState } from '../demo/demo.mjs'
-import { COMANDI, leggiMascotta, leggiSandbox, type Dipendenze } from './fonti'
+import { cliDiLinux, COMANDI, eseguibiliCli, leggiMascotta, leggiSandbox, ORCA_APP, type Dipendenze } from './fonti'
 import { componi, componiCoda, leggiTitolo, normaCli, normaMotore, normaSandbox, orchestratoreTra, ordinaProgetti, proveFinite, testoAvviso, voceBarra } from './norma'
 import { impostazioniDa, NEUTRE, NOME, type Opzioni } from './opzioni'
 import { avvia, deactivate } from './worker'
@@ -238,6 +238,40 @@ async function monta(f: Finte, settings: Record<string, unknown> = {}, storage: 
   attivo = worker
   return { host, worker }
 }
+
+test('on Linux the CLI checks the shim, packaged binaries, and ~/.local/bin before PATH', () => {
+  const candidates = cliDiLinux(
+    '/home/alice',
+    'linux',
+    { XDG_CONFIG_HOME: '/home/alice/.xdg' },
+    '/opt/Orca/resources',
+    '/usr/lib/orca-ide/app.asar.unpacked/out/main/plugin-host-entry.js'
+  )
+  assert.equal(candidates[0], '/home/alice/.xdg/orca/linux-orca-cli-shim/orca')
+  assert.equal(candidates[1], '/home/alice/.config/orca/linux-orca-cli-shim/orca')
+  assert.ok(candidates.includes('/opt/Orca/resources/bin/orca-ide'))
+  assert.ok(candidates.includes('/usr/lib/orca-ide/bin/orca-ide'))
+  assert.equal(candidates.at(-1), '/home/alice/.local/bin/orca')
+  assert.equal(new Set(candidates).size, candidates.length)
+
+  const noXdg = cliDiLinux('/home/alice', 'linux', { XDG_CONFIG_HOME: '   ' }, '', '')
+  assert.equal(noXdg[0], '/home/alice/.config/orca/linux-orca-cli-shim/orca')
+
+  assert.deepEqual(cliDiLinux('/Users/alice', 'darwin', {}, '/Applications/Orca.app/Contents/Resources', ''), [])
+  assert.deepEqual(cliDiLinux('C:\\Users\\alice', 'win32', {}, '', ''), [])
+})
+
+test('eseguibiliCli puts the configured path first, platform paths next, and bare orca last', () => {
+  const linux = eseguibiliCli('~/bin/my-orca', '/home/alice', 'linux', {}, '', '')
+  assert.equal(linux[0], '/home/alice/bin/my-orca')
+  assert.equal(linux[1], '/home/alice/.config/orca/linux-orca-cli-shim/orca')
+  assert.equal(linux.includes(ORCA_APP), false)
+  assert.equal(linux.at(-1), 'orca')
+
+  assert.deepEqual(eseguibiliCli('', '/Users/alice', 'darwin', {}, '', ''), [ORCA_APP, 'orca'])
+  assert.deepEqual(eseguibiliCli('~/bin/orca', '/Users/alice', 'darwin', {}, '', ''), ['/Users/alice/bin/orca', ORCA_APP, 'orca'])
+  assert.deepEqual(eseguibiliCli('', 'C:\\Users\\alice', 'win32', {}, '', ''), [ORCA_APP, 'orca'])
+})
 
 test('worker, nothing configured: a full picture, no state file looked for, read-only commands only', async () => {
   const f = finte()
