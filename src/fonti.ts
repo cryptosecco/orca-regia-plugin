@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process'
 import { watch } from 'node:fs'
 import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { posix } from 'node:path'
 import { avatarDi, botUnici, oggettoScelta, type CliGrezza, type FotoBot, type FotoSua, type StatoLetto } from './norma'
 
 /** Gli unici comandi che il plugin lancia. `{bot}` è l'id di un bot preso da `bot list`: il nome può cambiare e portare un'emoji, l'id no. */
@@ -197,9 +198,47 @@ export function argomentiCon(comando: 'item1' | 'scelta' | 'sceltaChat', valori:
   return [...modello.map((a) => (a === '{item}' ? item : a === 'bot:{bot}' ? `bot:${valori.bot}` : a === '{oggetto}' ? String(valori.oggetto) : a)), '--json']
 }
 
+export function cliDiLinux(
+  casa = homedir(),
+  sistema = process.platform,
+  ambiente: Record<string, string | undefined> = process.env,
+  risorse = (process as { resourcesPath?: string }).resourcesPath,
+  script = process.argv[1]
+): string[] {
+  if (sistema !== 'linux') return []
+  const xdg = ambiente.XDG_CONFIG_HOME?.trim()
+  const appDaScript = script?.includes('/app.asar.unpacked/') ? script.slice(0, script.indexOf('/app.asar.unpacked/')) : ''
+  const radici = [risorse, appDaScript, '/opt/Orca/resources', '/opt/orca-ide/resources', '/opt/orca/resources', '/usr/lib/orca-ide'].filter((r): r is string => Boolean(r))
+  return [
+    ...new Set([
+      ...(xdg ? [posix.join(xdg, 'orca', 'linux-orca-cli-shim', 'orca')] : []),
+      posix.join(casa, '.config', 'orca', 'linux-orca-cli-shim', 'orca'),
+      ...radici.flatMap((r) => [posix.join(r, 'bin', 'orca-ide'), posix.join(r, 'bin', 'orca')]),
+      posix.join(casa, '.local', 'bin', 'orca')
+    ])
+  ]
+}
+
+export function eseguibiliCli(
+  percorsoOrca: string,
+  casa: string,
+  sistema = process.platform,
+  ambiente: Record<string, string | undefined> = process.env,
+  risorse = (process as { resourcesPath?: string }).resourcesPath,
+  script = process.argv[1]
+): string[] {
+  return [
+    ...new Set([
+      percorsoOrca.trim() && espandi(percorsoOrca.trim(), casa),
+      ...(sistema === 'linux' ? cliDiLinux(casa, sistema, ambiente, risorse, script) : [ORCA_APP]),
+      'orca'
+    ].filter(Boolean))
+  ] as string[]
+}
+
 /** L'eseguibile della CLI per un comando fuori dai giri: quello che ha appena risposto ai giri in lettura, o il primo dell'elenco. */
 export function eseguibileBuono(dip: Dipendenze, percorsoOrca: string, mem: MemoriaCli): string {
-  const tutti = [...new Set([percorsoOrca.trim() && espandi(percorsoOrca.trim(), dip.casa), ORCA_APP, 'orca'].filter(Boolean))] as string[]
+  const tutti = eseguibiliCli(percorsoOrca, dip.casa)
   return mem.buono && tutti.includes(mem.buono) ? mem.buono : tutti[0]
 }
 
@@ -271,7 +310,7 @@ export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno:
  * lascia il dato di prima.
  */
 export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: MemoriaCli, opzioni: { tutto?: boolean; prioritario?: string; tuttiGliItem?: boolean; quanti?: number } = {}): Promise<CliGrezza> {
-  const tutti = [...new Set([percorsoOrca.trim() && espandi(percorsoOrca.trim(), dip.casa), ORCA_APP, 'orca'].filter(Boolean))] as string[]
+  const tutti = eseguibiliCli(percorsoOrca, dip.casa)
   // Il primo comando sceglie l'eseguibile buono: gli altri non riprovano quelli che mancano.
   const eseguibili = mem.buono && tutti.includes(mem.buono) ? [mem.buono, ...tutti.filter((e) => e !== mem.buono)] : tutti
   let bots: any[] = []
