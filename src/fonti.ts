@@ -316,8 +316,10 @@ export type MemoriaCli = {
   /** La richiesta di `bot list` in sottofondo, e la lista intera quando arriva: il giro dopo la usa. */
   sonda: Promise<void> | null
   piena: any[] | null
+  /** Comandi per bot fermati dalla scadenza (`bot work list` chiede anche ai server collegati): quando, per nome. Per un minuto non si richiedono. */
+  lenti: Partial<Record<NomeComando, number>>
 }
-export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno: 0, lista: null, sonda: null, piena: null })
+export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno: 0, lista: null, sonda: null, piena: null, lenti: {} })
 
 /**
  * Un giro sulla CLI, un comando dopo l'altro (mai in parallelo), a priorità:
@@ -412,9 +414,13 @@ export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: 
   }
 
   const prova = async (nome: NomeComando, bot?: string) => {
+    // Fermato un minuto fa dalla scadenza: costerebbe la scadenza intera per ogni bot. Restano gli ultimi dati.
+    const lento = mem.lenti[nome]
+    if (lento !== undefined && dip.adesso() - lento < RIPROVA_BOT_MS) return null
     try {
       return await comando(dip, [buono], nome, bot)
-    } catch {
+    } catch (x) {
+      if ((x as { killed?: boolean })?.killed || (x as { signal?: string | null })?.signal) mem.lenti[nome] = dip.adesso()
       return null
     }
   }

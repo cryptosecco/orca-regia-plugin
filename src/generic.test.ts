@@ -349,6 +349,35 @@ test('the retry of a hung bot list never holds a round: the round returns while 
   assert.ok(mem.sonda, 'the retry is running in the background')
 })
 
+test('a per-bot command that hangs on a paired server costs one deadline, not one per bot: the others are skipped for a minute and the last data stays', async () => {
+  // `bot work list --bot <id>` also asks the paired servers: with one down it is killed every time (12 s each, 13 bots: minutes per round).
+  const f = finte()
+  const demo = f.dip.lancia
+  const log: string[] = []
+  f.dip.lancia = async (e, a, s) => {
+    const c = a.filter((x) => x !== '--json').join(' ')
+    log.push(c)
+    if (c.startsWith('bot work list --bot ')) throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' })
+    return demo(e, a, s)
+  }
+  const mem = memoriaCli()
+  let ora = NOW
+  f.dip.adesso = () => ora
+  const g = await leggiCliAGiri(f.dip, '', mem, { tutto: true })
+  assert.equal(log.filter((c) => c.startsWith('bot work list --bot ')).length, 1, 'one kill, the other bots are skipped')
+  // The rest of the picture is all there: items and chats of every bot.
+  assert.ok(log.filter((c) => c.startsWith('bot item list --bot ')).length > 1)
+  assert.ok(g.bots.length > 1)
+  // The next rounds do not ask again for a minute...
+  ora += 4000
+  await leggiCliAGiri(f.dip, '', mem, { tutto: true })
+  assert.equal(log.filter((c) => c.startsWith('bot work list --bot ')).length, 1)
+  // ...and then they try once more.
+  ora += RIPROVA_BOT_MS
+  await leggiCliAGiri(f.dip, '', mem, { tutto: true })
+  assert.equal(log.filter((c) => c.startsWith('bot work list --bot ')).length, 2)
+})
+
 test('a `bot list` killed by its deadline is not tried again with the next executable', async () => {
   const { f, log } = conListaCheNonRisponde()
   await leggiCliAGiri(f.dip, '/custom/orca', memoriaCli(), { tutto: true })
