@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.5 — 2026-11-27
+
+- The options of a question in the Queue are buttons, one per line, with the recommended one marked; an item with several questions gets one group per question, and an option's note shows under its label.
+- A new menu in the Queue, **Send choices to**, under "Decide now": nobody (the default) or one of your bots. Nobody: a click sends nothing; it copies your answer and opens the chat of the bot that asked. A bot: a click sends your choice to that bot as a status message, once, so it can record it on the item. The card says "Sending…", "Sent at 10:42" or "Not sent" with the reason. Picking a bot sends nothing, and nothing is ever sent without your click.
+- Same capabilities and settings as 0.8.4: the pick is kept in the plugin's own storage, so updating does not ask for approval again.
+
 ## 0.8.4 — 2026-11-26
 
 - Fixed: a bot counted once per chat. Orca lists every chat a bot has ever had in its home, old and finished ones included, and the Office made an avatar of each: with about ten bots the bots' room could show 65 avatars and the Office 74 agents. Now each bot is one avatar, known by its id, with the state of its most active chat (waiting on you, then working, then in error, then the latest) and a click opens that chat. The Office tab, the scoreboard, the "all" and "idle" counts and the status bar count the same avatars. Workers a bot started stay agents, one each. A chat that waits on you is still among what waits on you.

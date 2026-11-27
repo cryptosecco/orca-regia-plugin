@@ -2,13 +2,16 @@
 // di stato facoltativo (modello, sforzo, contesto, cache, file toccati, incroci: spento se non se ne
 // indica uno) e, nelle case dei bot, i bot.json (quale foto profilo hanno in Orca) e l'immagine di chi ne ha caricata una.
 //
-// Solo lettura. I comandi sono un elenco fisso scritto qui sotto: da questo file non parte
-// nessun comando che scrive a un bot, a un agente o a un terminale.
+// In lettura, con un'eccezione voluta e spenta finché non la si accende: la scelta su una domanda della
+// coda. I comandi sono un elenco fisso scritto qui sotto (`COMANDI`); in lettura tutti tranne `scelta` e
+// `sceltaChat`, che mandano un messaggio di stato al bot scelto nel menu «Send choices to» della Queue
+// quando si preme un'opzione nella coda (`mandaScelta`), mai da soli, e mai senza un bot scelto. Nessun
+// comando scrive a un agente o a un terminale, e nessuno risponde a un item: è il bot che scrive la scelta.
 import { execFile } from 'node:child_process'
 import { watch } from 'node:fs'
 import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { avatarDi, botUnici, type CliGrezza, type FotoBot, type FotoSua, type StatoLetto } from './norma'
+import { avatarDi, botUnici, oggettoScelta, type CliGrezza, type FotoBot, type FotoSua, type StatoLetto } from './norma'
 
 /** Gli unici comandi che il plugin lancia. `{bot}` è l'id di un bot preso da `bot list`: il nome può cambiare e portare un'emoji, l'id no. */
 export const COMANDI = {
@@ -20,7 +23,15 @@ export const COMANDI = {
   automazioni: ['automations', 'list'],
   posta: ['orchestration', 'inbox', '--limit', '40', '--full'],
   // I worker di orchestrazione con lo stato della loro consegna: dice quali agenti sono stati avviati, e com'è finita.
-  operai: ['orchestration', 'worker-list']
+  operai: ['orchestration', 'worker-list'],
+  // Un item della coda letto un attimo prima di mandare una scelta: la domanda è ancora quella? `{item}` è il suo numero.
+  item1: ['bot', 'item', 'show', '{item}'],
+  // I soli comandi che scrivono: una scelta della coda, al bot scelto nel menu «Send choices to»
+  // (`{bot}`), come messaggio di stato. `scelta` va nella chat dell'item `{item}`, quando l'item è di quel
+  // bot; `sceltaChat` nella sua chat Home, quando l'item è di un altro bot (con la coda di tutti i bot).
+  // Il corpo arriva sullo standard input (`--body-file -`), mai sulla riga di comando.
+  scelta: ['orchestration', 'send', '--from', 'regia', '--to', 'bot:{bot}', '--item', '{item}', '--type', 'status', '--subject', '{oggetto}', '--body-file', '-'],
+  sceltaChat: ['orchestration', 'send', '--from', 'regia', '--to', 'bot:{bot}', '--type', 'status', '--subject', '{oggetto}', '--body-file', '-']
 } as const
 export type NomeComando = keyof typeof COMANDI
 
@@ -73,6 +84,8 @@ export type Dipendenze = {
   adesso: () => number
   /** Lancia `orca <argomenti> --json` e restituisce il testo stampato. */
   lancia: (eseguibile: string, argomenti: string[]) => Promise<string>
+  /** Come `lancia`, ma scrive `ingresso` sullo standard input del comando. Solo per `scelta` e `sceltaChat`. */
+  lanciaCon: (eseguibile: string, argomenti: string[], ingresso: string) => Promise<string>
   leggiFile: (percorso: string) => Promise<string>
   /** I nomi dentro una cartella. */
   elenca: (cartella: string) => Promise<string[]>
@@ -109,6 +122,15 @@ export function dipendenzeVere(): Dipendenze {
         execFile(eseguibile, argomenti, { timeout: 10_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (errore, stdout) =>
           errore ? no(errore) : ok(String(stdout))
         )
+      }),
+    lanciaCon: (eseguibile, argomenti, ingresso) =>
+      new Promise((ok, no) => {
+        const figlio = execFile(eseguibile, argomenti, { timeout: 20_000, maxBuffer: 1024 * 1024, windowsHide: true }, (errore, stdout) =>
+          // Un errore del comando stampa comunque la sua risposta JSON: chi chiama la legge per dire il motivo.
+          errore && !String(stdout).trim() ? no(errore) : ok(String(stdout))
+        )
+        figlio.stdin?.on('error', () => {})
+        figlio.stdin?.end(ingresso)
       }),
     leggiFile: (percorso) => readFile(percorso, 'utf8'),
     elenca: (cartella) => readdir(cartella),
@@ -149,11 +171,71 @@ export function dipendenzeVere(): Dipendenze {
 
 export function argomentiDi(comando: NomeComando, bot?: string): string[] {
   const modello: readonly string[] = COMANDI[comando]
+  // `item1`, `scelta` e `sceltaChat` hanno i loro controlli: passano solo da `argomentiCon`.
+  if (modello.includes('{item}') || modello.includes('{oggetto}')) throw new Error(`${comando} needs argomentiCon`)
   if (modello.includes('{bot}')) {
     if (!bot || !ID_BOT.test(bot)) throw new Error(`invalid bot id for ${comando}`)
     return [...modello.map((a) => (a === '{bot}' ? bot : a)), '--json']
   }
   return [...modello, '--json']
+}
+
+/** Il numero di un item, per i comandi: un intero positivo e basta. */
+const NUMERO_ITEM = /^[1-9][0-9]{0,8}$/
+
+/**
+ * Gli argomenti di `item1`, `scelta` e `sceltaChat`, coi segnaposto riempiti e controllati: il bot è un
+ * UUID, l'item un numero, l'oggetto è quello di `messaggioScelta` (testo fisso col numero dell'item).
+ * Nient'altro entra.
+ */
+export function argomentiCon(comando: 'item1' | 'scelta' | 'sceltaChat', valori: { bot?: string; item: number; oggetto?: string }): string[] {
+  const item = String(valori.item)
+  if (!NUMERO_ITEM.test(item)) throw new Error(`invalid item number for ${comando}`)
+  if (comando !== 'item1' && (!valori.bot || !ID_BOT.test(valori.bot))) throw new Error(`invalid bot id for ${comando}`)
+  if (comando !== 'item1' && valori.oggetto !== oggettoScelta(valori.item)) throw new Error(`unexpected subject for ${comando}`)
+  const modello: readonly string[] = COMANDI[comando]
+  return [...modello.map((a) => (a === '{item}' ? item : a === 'bot:{bot}' ? `bot:${valori.bot}` : a === '{oggetto}' ? String(valori.oggetto) : a)), '--json']
+}
+
+/** L'eseguibile della CLI per un comando fuori dai giri: quello che ha appena risposto ai giri in lettura, o il primo dell'elenco. */
+export function eseguibileBuono(dip: Dipendenze, percorsoOrca: string, mem: MemoriaCli): string {
+  const tutti = [...new Set([percorsoOrca.trim() && espandi(percorsoOrca.trim(), dip.casa), ORCA_APP, 'orca'].filter(Boolean))] as string[]
+  return mem.buono && tutti.includes(mem.buono) ? mem.buono : tutti[0]
+}
+
+/** Un item letto da Orca adesso (`bot item show <numero>`), o un errore. */
+export async function leggiItem(dip: Dipendenze, eseguibile: string, numero: number): Promise<any> {
+  const dati = JSON.parse(await dip.lancia(eseguibile, argomentiCon('item1', { item: numero })))
+  if (!dati?.ok) throw new Error(String(dati?.error?.message ?? dati?.error?.code ?? 'response not ok'))
+  return dati.result?.item ?? null
+}
+
+/** Il motivo di un invio non riuscito, per lo schermo: corto, su una riga. */
+const motivoCorto = (t: unknown): string => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, 160).replace(/[.\s]+$/, '')
+
+/**
+ * Manda la scelta al bot: un solo tentativo, con un solo eseguibile, perché un secondo tentativo dopo un
+ * invio riuscito a metà la manderebbe due volte. `nellItem`: nella chat dell'item (l'item è di quel bot),
+ * altrimenti nella sua chat Home. Restituisce null se Orca l'ha presa, altrimenti cosa dire: «non è partito
+ * niente» quando Orca l'ha rifiutata o il comando non è partito, «forse è partita» quando il comando è stato
+ * fermato a metà o ha risposto qualcosa che non si legge.
+ */
+export async function mandaScelta(dip: Dipendenze, eseguibile: string, x: { bot: string; numero: number; oggetto: string; corpo: string; nellItem: boolean }): Promise<string | null> {
+  const forse = 'Check the chat before trying again: the choice may have reached it.'
+  let testo: string
+  try {
+    testo = await dip.lanciaCon(eseguibile, argomentiCon(x.nellItem ? 'scelta' : 'sceltaChat', { bot: x.bot, item: x.numero, oggetto: x.oggetto }), x.corpo)
+  } catch (errore) {
+    const e = errore as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null }
+    if (e?.killed || e?.signal) return `Orca did not answer in time. ${forse}`
+    return `${motivoCorto(e?.message ?? errore)}. Nothing was sent.`
+  }
+  try {
+    const dati = JSON.parse(testo)
+    return dati?.ok ? null : `${motivoCorto(dati?.error?.message ?? dati?.error?.code ?? 'Orca did not take it')}. Nothing was sent.`
+  } catch {
+    return `Orca answered something unreadable. ${forse}`
+  }
 }
 
 export const espandi = (percorso: string, casa: string): string =>

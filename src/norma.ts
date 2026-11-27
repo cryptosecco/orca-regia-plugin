@@ -63,32 +63,178 @@ export function senzaPercorsi(testo: unknown): string {
   })
 }
 
+/** I limiti di Orca per una domanda (`BOT_ITEM_ASK_LIMITS`): oltre, quello che arriva non si mostra. */
+export const MASSIMO_QUESITI = 5
+export const MASSIMO_OPZIONI = 8
+
+/**
+ * Le domande di un item col loro testo com'è in Orca, non ancora accorciato: quelle di `ask.questions`, o
+ * se mancano quelle di `decisions`. Una domanda senza testo e un'opzione senza etichetta (o che non sono
+ * testo) si scartano; la consigliata segue la sua opzione, non il suo posto; al massimo 5 domande da 8
+ * opzioni. Le posizioni che escono di qui sono le stesse dei tasti del pannello: `normaDomanda` le
+ * accorcia per lo schermo, la scelta mandata al bot (`messaggioScelta`) usa il testo intero.
+ */
+export function quesitiDi(q: Grezzo): import('./protocol').Quesito[] {
+  if (!q) return []
+  const lista = (x: unknown): Grezzo[] => (Array.isArray(x) ? x : [])
+  const testo = (x: unknown): string => (typeof x === 'string' ? x : '')
+  const grezze = lista(q.ask?.questions).length
+    ? lista(q.ask.questions).map((d: Grezzo) => ({ chiede: d?.prompt, opzioni: lista(d?.options).map((o) => ({ etichetta: o?.label, dettaglio: o?.detail })), consigliata: d?.recommended, multi: d?.multi === true }))
+    : lista(q.decisions).map((d: Grezzo) => {
+        const risposte = lista(d?.replies)
+        return { chiede: d?.question, opzioni: risposte.map((r) => ({ etichetta: r?.label, dettaglio: r?.detail })), consigliata: risposte.findIndex((r) => r?.recommended === true), multi: d?.multi === true }
+      })
+  return grezze
+    .filter((d) => testo(d.chiede).trim())
+    .slice(0, MASSIMO_QUESITI)
+    .map((d) => {
+      const opzioni = d.opzioni
+        .slice(0, MASSIMO_OPZIONI)
+        .map((o, i) => ({ etichetta: testo(o.etichetta), dettaglio: testo(o.dettaglio), i }))
+        .filter((o) => o.etichetta.trim())
+      const consigliata = Number.isInteger(d.consigliata) ? opzioni.findIndex((o) => o.i === d.consigliata) : -1
+      return { chiede: d.chiede as string, opzioni: opzioni.map(({ etichetta, dettaglio }) => ({ etichetta, dettaglio })), consigliata: consigliata >= 0 ? consigliata : null, multi: d.multi }
+    })
+}
+
+/** La chiave di una scelta, la stessa del pannello: voce, evento della domanda, domanda; con più scelte possibili anche l'opzione. */
+export const chiaveScelta = (uid: string, evento: string, q: number, o?: number): string => `${uid}:${evento}:${q}${o === undefined ? '' : ':' + o}`
+
+/**
+ * Un testo dei bot dentro il messaggio di una scelta: una riga sola, senza caratteri di controllo né quelli
+ * che girano il verso del testo (potrebbero far leggere un'opzione per un'altra), tagliato a `n`. Per il
+ * resto resta com'è in Orca: è il bot che riceve che deve riconoscere domanda e opzione.
+ */
+export function rigaPulita(testo: unknown, n: number): string {
+  const t = String(testo ?? '')
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return t.length <= n ? t : t.slice(0, n - 1).trimEnd() + '…'
+}
+
+const due2 = (n: number): string => String(n).padStart(2, '0')
+/** L'ora di un clic, nel fuso di questo Mac e con lo scarto da UTC: «27/11/2026 10:42 (+01:00)». */
+export function oraScelta(ms: number): string {
+  const d = new Date(ms)
+  const scarto = -d.getTimezoneOffset()
+  const segno = scarto >= 0 ? '+' : '-'
+  return `${due2(d.getDate())}/${due2(d.getMonth() + 1)}/${d.getFullYear()} ${due2(d.getHours())}:${due2(d.getMinutes())} (${segno}${due2(Math.floor(Math.abs(scarto) / 60))}:${due2(Math.abs(scarto) % 60)})`
+}
+
+/**
+ * Un id o un evento che arriva dal pannello: lettere, cifre, trattini e due punti (con la coda di tutti i
+ * bot l'uid di una voce è `<id del bot>:<uid>`); mai un trattino in testa. Non entra in nessun comando:
+ * serve solo a ritrovare la voce nel quadro.
+ */
+const SIGLA = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/
+
+/** La richiesta del pannello quando si preme un'opzione, controllata: solo uid, evento e due numeri nei limiti di Orca. */
+export function richiestaScelta(x: unknown): import('./protocol').RichiestaScelta | null {
+  if (!x || typeof x !== 'object') return null
+  const { item, evento, q, o } = x as Record<string, unknown>
+  if (typeof item !== 'string' || !SIGLA.test(item) || typeof evento !== 'string' || !SIGLA.test(evento)) return null
+  if (!Number.isInteger(q) || !Number.isInteger(o)) return null
+  if ((q as number) < 0 || (q as number) >= MASSIMO_QUESITI || (o as number) < 0 || (o as number) >= MASSIMO_OPZIONI) return null
+  return { item, evento, q: q as number, o: o as number }
+}
+
+/**
+ * Le scelte inviate che valgono ancora, dentro questo quadro: la voce aspetta ancora una risposta con la
+ * stessa domanda. Quando il bot l'ha presa (l'item è passato in corso) o ha chiesto altro, la scelta si dimentica.
+ * Si guarda solo la chiave (voce ed evento in testa). Una lista che non è un oggetto vale vuota.
+ */
+export function scelteVive(inviate: unknown, q: Quadro): Record<string, import('./protocol').SceltaInviata> {
+  if (!inviate || typeof inviate !== 'object') return {}
+  const vive = new Set(q.coda.voci.filter((v) => v.stato === 'needs_you' && v.domanda?.evento).map((v) => `${v.uid}:${v.domanda?.evento}:`))
+  const fuori: Record<string, import('./protocol').SceltaInviata> = {}
+  for (const [chiave, s] of Object.entries(inviate as Record<string, any>)) {
+    if (![...vive].some((v) => chiave.startsWith(v)) || !Number.isInteger(s?.o) || typeof s?.quando !== 'number') continue
+    fuori[chiave] = { o: s.o, quando: s.quando }
+  }
+  return fuori
+}
+
+/** L'id di un bot: un UUID, come lo dà `bot list`. */
+const ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Il bot scelto nel menu «Send choices to», com'è nello storage del plugin, controllato: un id di bot (UUID)
+ * e un nome corto. Qualsiasi altra cosa vale «nessun bot».
+ */
+export function botScelteDa(x: unknown): import('./protocol').BotScelte | null {
+  if (!x || typeof x !== 'object') return null
+  const { id, nome } = x as Record<string, unknown>
+  if (typeof id !== 'string' || !ID_UUID.test(id)) return null
+  return { id: id.toLowerCase(), nome: typeof nome === 'string' ? corto(nome, 80) : '' }
+}
+
+/**
+ * Dove va una scelta premuta nella coda, per il pannello: il bot scelto nel menu «Send choices to»,
+ * ritrovato tra i bot di Orca per id; il suo nome com'era, se non c'è più; o niente (nessun bot scelto:
+ * il clic copia la risposta e apre la chat).
+ */
+export function destinoScelte(bot: Bot[], scelto: import('./protocol').BotScelte | null): { bot: string; id: string } | { manca: string } | null {
+  if (!scelto) return null
+  const b = bot.find((x) => x.id.toLowerCase() === scelto.id && !x.soloMotore)
+  return b ? { bot: b.nome, id: b.id } : { manca: scelto.nome || 'the chosen bot' }
+}
+
+/** Il mittente che il bot vede sulla posta della Regia: un nome fisso, non il terminale o la sessione di qualcun altro. */
+export const MITTENTE_SCELTE = 'regia'
+
+/** L'oggetto del messaggio di una scelta: testo fisso col numero dell'item. */
+export const oggettoScelta = (numero: number): string => `Regia · choice · item ${numero}`
+
+/**
+ * Il messaggio per il bot scelto nel menu «Send choices to» quando si preme un'opzione: oggetto fisso
+ * col numero dell'item, e nel corpo item, domanda, opzione scelta (lettera ed etichetta esatta) e ora.
+ * `diAltro`: il nome del bot che ha l'item, quando non è quello che riceve (con la coda di tutti i bot).
+ * Tutto il testo viene dall'item letto da Orca un attimo prima; dal pannello arrivano solo numeri. Nessun
+ * percorso né segreto ci entra oltre a quello che c'è già scritto nell'item.
+ */
+export function messaggioScelta(x: { numero: number; titolo: string; quesiti: import('./protocol').Quesito[]; q: number; o: number; quando: number; diAltro?: string }): { oggetto: string; corpo: string } | null {
+  const quesito = x.quesiti[x.q]
+  const opzione = quesito?.opzioni[x.o]
+  if (!opzione || !Number.isInteger(x.numero) || x.numero <= 0) return null
+  const lettera = 'ABCDEFGH'[x.o] ?? String(x.o + 1)
+  const corpo = [
+    `Your owner chose this with one click in the Regia queue: no typed text.`,
+    ``,
+    `Item: ${x.numero} · ${rigaPulita(x.titolo, 200)}`,
+    ...(x.diAltro ? [`Item of: ${rigaPulita(x.diAltro, 80)}`] : []),
+    `Question${x.quesiti.length > 1 ? ` ${x.q + 1} of ${x.quesiti.length}` : ''}: ${rigaPulita(quesito.chiede, 500)}`,
+    `Choice: ${lettera} · «${rigaPulita(opzione.etichetta, 150)}»${quesito.multi ? ' (more than one can be chosen: this is one of them)' : ''}`,
+    `Time: ${oraScelta(x.quando)}`,
+    ``,
+    x.diAltro ? `Please record it on item ${x.numero} as your owner's answer, or pass it to the bot that owns it.` : `Please record it on item ${x.numero} as your owner's answer.`
+  ].join('\n')
+  return { oggetto: oggettoScelta(x.numero), corpo }
+}
+
 /**
  * La domanda aperta di un item, da come la dà Orca. Le domande vere e proprie stanno in `ask.questions`
- * (prompt, options, recommended) o in `decisions` (question, replies con recommended): vale la prima, con
- * le sue opzioni, e si dice quante altre ce ne sono. `contesto` è quello che le accompagna (il `gist`, cioè
- * l'ultimo commento): il pannello lo mostra solo quando una domanda non c'è. I percorsi di file si accorciano.
+ * (prompt, options con label e detail, recommended, multi) o in `decisions` (question, replies con
+ * recommended, multi): ci sono tutte, ognuna con le sue opzioni, perché il pannello ne fa un gruppo di
+ * tasti per domanda. `contesto` è quello che le accompagna (il `gist`, cioè l'ultimo commento): il pannello
+ * lo mostra solo quando una domanda non c'è. I percorsi di file si accorciano. Il testo arriva dai bot e
+ * può essere qualsiasi cosa: qui diventa solo stringhe corte; a ripulirlo per l'HTML ci pensa il pannello.
  */
 export function normaDomanda(q: Grezzo, casa = ''): import('./protocol').Domanda | null {
   if (!q) return null
   const pulito = (t: unknown, n: number): string => corto(senzaPercorsi(t), n, casa)
-  const domande: { chiede: string; opzioni: string[]; consigliata: number | null }[] = [
-    ...(q.ask?.questions ?? []).map((d: Grezzo) => ({ chiede: d?.prompt, opzioni: (d?.options ?? []).map((o: Grezzo) => o?.label), consigliata: typeof d?.recommended === 'number' ? d.recommended : null })),
-    ...(q.ask?.questions?.length ? [] : (q.decisions ?? [])).map((d: Grezzo) => {
-      const risposte: Grezzo[] = d?.replies ?? []
-      const scelta = risposte.findIndex((r) => r?.recommended === true)
-      return { chiede: d?.question, opzioni: risposte.map((r) => r?.label), consigliata: scelta >= 0 ? scelta : null }
-    })
-  ].filter((d) => String(d.chiede ?? '').trim())
-  const prima = domande[0]
+  const domande = quesitiDi(q).map((d) => ({
+    chiede: pulito(d.chiede, 200),
+    opzioni: d.opzioni.map((o) => ({ etichetta: pulito(o.etichetta, 150), dettaglio: pulito(o.dettaglio, 200) })),
+    consigliata: d.consigliata,
+    multi: d.multi
+  }))
   return {
     evento: String(q.eventId ?? ''),
     // Il testo libero serve solo se la domanda non è strutturata: altrimenti ripete domande e opzioni.
     contesto: pulito(q.ask?.context ?? q.gist ?? (domande.length ? '' : q.text), 260),
-    chiede: pulito(prima?.chiede ?? '', 200),
-    opzioni: (prima?.opzioni ?? []).map((o) => pulito(o, 90)).filter(Boolean),
-    consigliata: prima?.consigliata ?? null,
-    altre: Math.max(0, domande.length - 1)
+    chiede: domande[0]?.chiede ?? '',
+    domande
   }
 }
 

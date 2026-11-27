@@ -23,7 +23,10 @@ let vista = 'panoramica'
 // `chiuse`, le corsie richiuse, che restano nello storage del plugin (storage:own) tra una volta e l'altra.
 // Dell'Office: `lista` (l'elenco di schede al posto della mappa) e `scelto` (l'avatar con la scheda aperta).
 // Della sandbox: `prova`, l'id della prova di cui è aperta la scheda (da qualsiasi vista).
-const scelte = { lista: false, scelto: '', tipo: '', tutti: false, stato: '', fornitore: '', aperte: [], filtro: '', progetto: undefined, chiuse: [], prova: '' }
+// Della coda anche `esiti`: le scelte premute in questo pannello (copiate, in invio, non riuscite, cambiate), per
+// V.chiaveScelta; quelle già inviate le sa il worker (`quadro.scelte`). Spariscono quando la domanda cambia
+// o la voce esce dalla coda.
+const scelte = { lista: false, scelto: '', tipo: '', tutti: false, stato: '', fornitore: '', aperte: [], filtro: '', progetto: undefined, chiuse: [], prova: '', esiti: {} }
 const CHIAVE_CHIUSE = 'coda.corsieChiuse'
 // L'elenco aperto sotto il tabellone: `fisso` l'ha aperto un clic (o un tocco), `sopra` il passaggio del mouse.
 const tab = { fisso: '', sopra: '' }
@@ -250,6 +253,7 @@ async function carica(nome = 'regia.quadro') {
     quadro = await api.plugin.request(nome)
     animazioni(quadro)
     muovi(prima, quadro)
+    scelte.esiti = esitiVivi(scelte.esiti, quadro)
     disegna()
     lampeggia(quadro)
   } catch (errore) {
@@ -314,6 +318,85 @@ async function apriInOrca(d) {
   else avviso(esito.motivo || T.pannello.cannotOpen)
 }
 
+/**
+ * Gli esiti di questo pannello che valgono ancora: la voce aspetta ancora una risposta, la sua domanda è la
+ * stessa (stesso evento), e il worker non la sa già inviata (allora vale la sua, in `q.scelte`). Uno «in
+ * invio» resta finché la richiesta non torna.
+ */
+function esitiVivi(esiti, q) {
+  const vive = (q?.coda?.voci ?? []).filter((v) => v.stato === 'needs_you' && v.domanda?.evento).map((v) => `${v.uid}:${v.domanda.evento}:`)
+  return Object.fromEntries(Object.entries(esiti).filter(([k, es]) => vive.some((t) => k.startsWith(t)) && (es.stato === 'invio' || !q?.scelte?.[k])))
+}
+
+/** Quanto aspetta il pannello il worker: rilegge l'item e manda il messaggio, due comandi della CLI. */
+const ATTESA_SCELTA_MS = 45_000
+
+/**
+ * Niente parte: si segna la scelta, si prova a copiare la risposta pronta (V.testoRisposta) e si apre la
+ * chat del bot che ha l'item, dove la si incolla o la si scrive.
+ */
+async function copiaEApri(d, voce, q, o, chiave) {
+  // Prima si segna la scelta, così si vede subito; la copia può non riuscire, o non rispondere mai (un
+  // pannello senza gli appunti): le si dà al massimo un attimo.
+  scelte.esiti = { ...scelte.esiti, [chiave]: { o, stato: 'aperta', copiata: false } }
+  disegna()
+  let copiata = false
+  try {
+    await Promise.race([navigator.clipboard.writeText(V.testoRisposta(voce, q, o)), new Promise((_, no) => setTimeout(() => no(new Error('clipboard timeout')), 800))])
+    copiata = true
+  } catch {
+    // Il pannello può non avere gli appunti: la scelta resta scritta sotto la domanda.
+  }
+  if (copiata) {
+    scelte.esiti = { ...scelte.esiti, [chiave]: { o, stato: 'aperta', copiata } }
+    disegna()
+  }
+  if (d.apri) await apriInOrca(d)
+  else if (d.vai) vai(d.vai)
+}
+
+/**
+ * Un'opzione di una domanda della coda. Con un bot nel menu «Send choices to» la scelta va a lui: il pannello
+ * manda al worker solo la voce, l'evento della domanda e due numeri, e il worker rilegge l'item da Orca e
+ * manda il messaggio. Mentre parte, e dopo, i tasti di quella domanda sono spenti; se non parte si dice
+ * perché e si può riprovare. Senza un bot non parte niente: copia e apre la chat.
+ */
+async function scegli(d) {
+  const voce = (quadro?.coda?.voci ?? []).find((v) => v.uid === d.scelta)
+  const q = Number(d.q), o = Number(d.o)
+  const quesito = voce && voce.domanda?.evento === d.evento ? voce.domanda.domande?.[q] : undefined
+  if (!quesito || !quesito.opzioni?.[o]) {
+    // La domanda è cambiata tra il disegno e il clic: si ridisegna e non parte niente.
+    avviso(T.pannello.questionChanged)
+    disegna()
+    return
+  }
+  const chiave = V.chiaveScelta(voce.uid, voce.domanda.evento, q, quesito.multi ? o : undefined)
+  if (!V.botScelte(quadro)) return copiaEApri(d, voce, q, o, chiave)
+  const prima = V.esitiDi(quadro, scelte.esiti)[chiave]
+  // Un secondo clic (o un doppio clic) mentre parte, o dopo che è partita, non fa niente.
+  if (prima && (prima.stato === 'invio' || prima.stato === 'inviata')) return
+  scelte.esiti = { ...scelte.esiti, [chiave]: { o, stato: 'invio' } }
+  disegna()
+  let esito
+  try {
+    esito = await api.plugin.request('regia.scelta', { item: voce.uid, evento: voce.domanda.evento, q, o }, { timeoutMs: ATTESA_SCELTA_MS })
+  } catch (errore) {
+    esito = { stato: 'errore', motivo: errore?.code === 'timeout' ? T.pannello.workerSlow : T.pannello.workerNoAnswer(errore?.code || errore?.message || T.pannello.errorWord) }
+  }
+  // L'impostazione è stata svuotata intanto: niente è partito, si fa come senza.
+  if (esito?.stato === 'spento') {
+    const { [chiave]: _, ...resto } = scelte.esiti
+    scelte.esiti = resto
+    return copiaEApri(d, voce, q, o, chiave)
+  }
+  const stato = ['inviata', 'cambiata', 'errore'].includes(esito?.stato) ? esito.stato : 'errore'
+  scelte.esiti = { ...scelte.esiti, [chiave]: { o: stato === 'inviata' && Number.isInteger(esito.o) ? esito.o : o, stato, quando: esito?.quando, motivo: typeof esito?.motivo === 'string' ? esito.motivo : undefined } }
+  disegna()
+  // Una domanda cambiata: si rilegge subito la coda, così la carta mostra quella nuova.
+  if (stato === 'cambiata') void carica('regia.aggiorna')
+}
+
 document.addEventListener('click', async (evento) => {
   // Il lucchetto, la stanza Sandbox, «N in sandbox» e «N blocked» aprono la scheda di quella prova; un altro
   // clic sullo stesso, o la ✕, la chiude. Viene prima di tutto: un lucchetto può stare dentro un altro tasto.
@@ -342,7 +425,9 @@ document.addEventListener('click', async (evento) => {
   if (!el) return
   const d = el.dataset
   nascondiFumetto()
-  if ('tab' in d) {
+  if ('scelta' in d) {
+    await scegli(d)
+  } else if ('tab' in d) {
     // Un numero del tabellone: il clic (o il tocco) apre e fissa l'elenco dei suoi agenti, un altro lo chiude.
     tab.fisso = tab.fisso === d.tab ? '' : d.tab
     tab.sopra = ''
@@ -415,6 +500,25 @@ $('tabellone').addEventListener('mouseleave', () => {
 })
 
 // Il filtro per progetto è un menu: una corsia sola, oppure tutte.
+// Il menu «Send choices to» della Queue: il bot che riceve le scelte, salvato dal worker nello storage del
+// plugin. Cambiarlo non manda niente; se il worker lo rifiuta, il menu torna com'era e lo si dice.
+document.addEventListener('change', async (evento) => {
+  const el = evento.target instanceof HTMLSelectElement && 'botScelte' in evento.target.dataset ? evento.target : null
+  if (!el || !quadro) return
+  el.disabled = true
+  let r
+  try {
+    r = await api.plugin.request('regia.botScelte', { bot: el.value })
+  } catch (errore) {
+    r = { errore: errore?.code || errore?.message || T.pannello.errorWord }
+  }
+  if (r && 'invioScelte' in r) quadro = { ...quadro, invioScelte: r.invioScelte }
+  else avviso(T.coda.menuFailed(r?.errore || T.pannello.errorWord))
+  // Il menu si ridisegna sempre: col bot nuovo, o con quello di prima se non è cambiato.
+  ultimo.vista = ''
+  disegna()
+})
+
 document.addEventListener('change', (evento) => {
   const el = evento.target instanceof HTMLSelectElement && 'filtroProgetto' in evento.target.dataset ? evento.target : null
   if (!el) return

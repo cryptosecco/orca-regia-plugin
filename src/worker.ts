@@ -2,13 +2,15 @@
 // sovrappongono, fatti partire dal tempo, dagli eventi di Orca e dai file che cambiano; a ogni giro
 // avvisa il pannello, aggiorna la voce nella barra di stato e avvisa quando qualcosa di nuovo aspetta una risposta.
 //
-// Sola lettura, con due eccezioni volute: portare Orca su una scheda o un terminale
-// (workspace:write) e mostrare un avviso (notifications:show). Non scrive a bot, agenti o terminali.
+// In lettura, con tre eccezioni volute: portare Orca su una scheda o un terminale (workspace:write),
+// mostrare un avviso (notifications:show) e, solo se nel menu «Send choices to» della Queue c'è un bot,
+// mandargli con la CLI di Orca la scelta premuta su un'opzione della coda (`regia.scelta`). Non scrive ad
+// agenti o terminali e non risponde agli item.
 import type { OrcaWorkerApi } from 'orca/worker'
-import { CASE_BOT, comandiARotazione, dipendenzeVere, espandi, FILE_DI_CASA, leggiCliAGiri, leggiFoto, leggiMotore, leggiRegistro, leggiSandbox, memoriaCli, SANDBOX, type Dipendenze } from './fonti'
-import { attesaNuove, componi, fotoDi, normaCli, normaMotore, normaSandbox, proveFinite, testoAvviso, voceBarra, type FotoBot, type ParteCli } from './norma'
+import { CASE_BOT, comandiARotazione, dipendenzeVere, eseguibileBuono, espandi, FILE_DI_CASA, ID_BOT, leggiCliAGiri, leggiFoto, leggiItem, leggiMotore, leggiRegistro, leggiSandbox, mandaScelta, memoriaCli, SANDBOX, type Dipendenze } from './fonti'
+import { attesaNuove, botScelteDa, chiaveScelta, componi, corto, destinoScelte, fotoDi, messaggioScelta, normaCli, normaDomanda, normaMotore, normaSandbox, proveFinite, quesitiDi, richiestaScelta, scelteVive, testoAvviso, voceBarra, type FotoBot, type ParteCli } from './norma'
 import { impostazioniDa, NOME, type Impostazioni } from './opzioni'
-import type { Bersaglio, Prova, Quadro } from './protocol'
+import type { Bersaglio, BotScelte, EsitoScelta, Prova, Quadro, SceltaInviata } from './protocol'
 
 /** L'id della voce nella barra di stato e quello del comando, come nel manifest. */
 const VOCE = 'status'
@@ -26,6 +28,15 @@ export const GIRO_CLI_MS = 4000
 const DOPO_EVENTO_MS = 400
 /** Mai due giri più vicini di così, nemmeno sotto una raffica di eventi. */
 const MINIMO_TRA_GIRI_MS = 1000
+
+/** Dove restano le scelte già mandate, nello storage del plugin: un pannello riaperto o un worker ripartito non le rimanda. */
+const CHIAVE_INVIATE = 'scelte.inviate'
+/**
+ * Il bot scelto nel menu «Send choices to» della Queue, nello storage del plugin (`storage:own`): non è
+ * un'impostazione del manifest, così la 0.8.5 non aggiunge contributi e l'aggiornamento non chiede di
+ * nuovo l'approvazione. Lo scrive solo il worker, su richiesta del pannello (`regia.botScelte`).
+ */
+const CHIAVE_BOT = 'scelte.bot'
 
 let ferma: (() => void) | null = null
 
@@ -53,6 +64,12 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
   let sandbox: { prove: Prova[] } | null = null
   let barra = ''
   let chiaviAttese: string | null = null
+  // Le scelte già mandate (per chiaveScelta) e quelle che stanno partendo adesso: la stessa scelta
+  // non parte due volte, nemmeno con due clic di fila o due pannelli aperti.
+  let inviate: Record<string, SceltaInviata> | null = null
+  // Il bot scelto nel menu «Send choices to»: undefined finché non si è letto lo storage, null se non c'è.
+  let botScelte: BotScelte | null | undefined
+  const inVolo = new Map<string, Promise<EsitoScelta>>()
   // Le cartelle tenute d'occhio, per percorso.
   const occhi = new Map<string, { chiudi: () => void }>()
   // Cosa fare quando in una cartella tenuta d'occhio cambia qualcosa, per percorso.
@@ -198,6 +215,8 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
     }
 
     const nuovo = componi({ adesso, cli, motore, motoreSpento: !percorsoStato, api: { workspaces }, botInArrivo: imp.botAttesi, foto, casa: dip.casa, opzioni: imp, fermo: !imp.animazioni, sandbox })
+    nuovo.invioScelte = destinoScelte(nuovo.bot, await caricaBotScelte())
+    nuovo.scelte = await scelteDel(nuovo, conCli && !cli.errore)
     quadro = nuovo
     if (!viva) return nuovo
 
@@ -231,6 +250,139 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
     } catch (e) {
       orca.log('avviso: ' + messaggio(e))
     }
+  }
+
+  async function caricaBotScelte(): Promise<BotScelte | null> {
+    if (botScelte !== undefined) return botScelte
+    try {
+      botScelte = botScelteDa(await orca.storage.get(CHIAVE_BOT))
+    } catch {
+      botScelte = null
+    }
+    return botScelte
+  }
+
+  /**
+   * Il menu «Send choices to» del pannello: `bot` è l'id di uno dei bot di Orca, o vuoto per nessuno. Si
+   * salva nello storage del plugin e vale da subito; non manda niente. Un id che non è di un bot si rifiuta.
+   */
+  async function sceglieBot(chiesta: unknown): Promise<{ invioScelte: Quadro['invioScelte'] } | { errore: string }> {
+    const id = chiesta && typeof chiesta === 'object' && typeof (chiesta as any).bot === 'string' ? String((chiesta as any).bot).toLowerCase() : null
+    if (id === null) return { errore: 'The panel sent an invalid choice of bot: nothing changed.' }
+    const q = quadro ?? (await aggiorna())
+    const b = id ? q.bot.find((x) => x.id.toLowerCase() === id && !x.soloMotore && ID_BOT.test(x.id)) : null
+    if (id && !b) return { errore: 'That is not one of Orca\'s bots: nothing changed.' }
+    const nuovo: BotScelte | null = b ? { id: b.id.toLowerCase(), nome: corto(b.nome, 80) } : null
+    try {
+      await orca.storage.set(CHIAVE_BOT, nuovo)
+    } catch (e) {
+      return { errore: 'Cannot save the choice of bot: ' + messaggio(e) }
+    }
+    botScelte = nuovo
+    q.invioScelte = destinoScelte(q.bot, nuovo)
+    orca.log(nuovo ? `choices now go to ${nuovo.nome}` : 'choices are no longer sent')
+    orca.panels.post('regia.cambiato', { quando: q.quando })
+    return { invioScelte: q.invioScelte }
+  }
+
+  async function caricaInviate(): Promise<Record<string, SceltaInviata>> {
+    if (inviate) return inviate
+    try {
+      const salvate = await orca.storage.get(CHIAVE_INVIATE)
+      inviate = salvate && typeof salvate === 'object' && !Array.isArray(salvate) ? { ...(salvate as Record<string, SceltaInviata>) } : {}
+    } catch {
+      inviate = {}
+    }
+    return inviate
+  }
+
+  /**
+   * Le scelte inviate che valgono in questo quadro. Con la CLI appena letta si dimenticano quelle di voci
+   * uscite dalla coda o di domande cambiate; senza, si tengono tutte (la coda potrebbe essere vecchia).
+   */
+  async function scelteDel(q: Quadro, coiDatiNuovi: boolean): Promise<Record<string, SceltaInviata>> {
+    const tutte = await caricaInviate()
+    const vive = scelteVive(tutte, q)
+    if (coiDatiNuovi && q.coda.presente && Object.keys(vive).length !== Object.keys(tutte).length) {
+      inviate = vive
+      try {
+        await orca.storage.set(CHIAVE_INVIATE, vive)
+      } catch (e) {
+        orca.log('scelte: ' + messaggio(e))
+      }
+    }
+    return vive
+  }
+
+  /**
+   * Un'opzione premuta nella coda: con un bot nel menu «Send choices to» la scelta va a quel bot, una
+   * volta sola; senza, non parte niente (`spento`: il pannello copia la risposta e apre la chat). Dal
+   * pannello arrivano solo uid, evento e due numeri; domanda e opzione si rileggono da Orca un attimo
+   * prima di mandare, e se non sono più quelle non parte niente.
+   */
+  async function scegli(chiesta: unknown): Promise<EsitoScelta> {
+    const r = richiestaScelta(chiesta)
+    if (!r) return { stato: 'errore', motivo: 'The panel sent an invalid choice: nothing was sent.' }
+    const scelto = await caricaBotScelte()
+    if (!scelto) return { stato: 'spento' }
+    const imp = await leggiImpostazioni()
+    const q = quadro ?? (await aggiorna())
+    const voce = q.coda.voci.find((v) => v.uid === r.item)
+    const quesito = voce?.domanda?.evento === r.evento ? voce.domanda.domande[r.q] : undefined
+    if (!voce || voce.stato !== 'needs_you' || !quesito?.opzioni[r.o]) return { stato: 'cambiata', motivo: 'This question is no longer open here: nothing was sent.' }
+    const chiave = chiaveScelta(voce.uid, r.evento, r.q, quesito.multi ? r.o : undefined)
+    const gia = (await caricaInviate())[chiave]
+    if (gia) return { stato: 'inviata', o: gia.o, quando: gia.quando, gia: true }
+    const volo = inVolo.get(chiave)
+    if (volo) return volo
+    const invio = invia(q, imp, scelto, voce, r.q, r.o, chiave).finally(() => inVolo.delete(chiave))
+    inVolo.set(chiave, invio)
+    return invio
+  }
+
+  async function invia(q: Quadro, imp: Impostazioni, scelto: BotScelte, voce: Quadro['coda']['voci'][number], qi: number, oi: number, chiave: string): Promise<EsitoScelta> {
+    // Chi riceve: il bot del menu, per id. Chi ha l'item: il bot della voce.
+    const destino = q.bot.find((b) => b.id.toLowerCase() === scelto.id && !b.soloMotore)
+    if (!destino || !ID_BOT.test(destino.id)) return { stato: 'errore', motivo: `“${scelto.nome || 'The chosen bot'}” (Send choices to) is no longer one of Orca's bots: nothing was sent.` }
+    const suo = q.bot.find((b) => b.nome === voce.bot)
+    const eseguibile = eseguibileBuono(dip, imp.orca, memoria)
+    let item: any
+    try {
+      item = await leggiItem(dip, eseguibile, voce.numero)
+    } catch (e) {
+      return { stato: 'errore', motivo: 'Cannot read the item from Orca: ' + messaggio(e) + '. Nothing was sent.' }
+    }
+    // La domanda dev'essere ancora quella che si è vista: stesso item dello stesso bot, che aspetta ancora
+    // una risposta, stesso evento, e la stessa opzione allo stesso posto.
+    const proprietario = String(item?.owner?.botId ?? suo?.id ?? '')
+    const stessa =
+      item &&
+      (!suo || proprietario === suo.id) &&
+      (item.uid === undefined || String(item.uid) === voce.uid || `${proprietario}:${item.uid}` === voce.uid) &&
+      item.status === 'needs_you' &&
+      String(item.question?.eventId ?? '') === voce.domanda?.evento &&
+      normaDomanda(item.question, dip.casa)?.domande[qi]?.opzioni[oi]?.etichetta === voce.domanda?.domande[qi]?.opzioni[oi]?.etichetta
+    const quando = dip.adesso()
+    // L'item è del bot che riceve: il messaggio va nella chat dell'item. Di un altro bot: nella sua chat Home, col nome di chi ha l'item.
+    const nellItem = proprietario === destino.id
+    const m = stessa ? messaggioScelta({ numero: voce.numero, titolo: String(item.title ?? voce.titolo), quesiti: quesitiDi(item.question), q: qi, o: oi, quando, diAltro: nellItem ? undefined : voce.bot || undefined }) : null
+    if (!m) {
+      chiedi(true)
+      return { stato: 'cambiata', motivo: 'In Orca this question has changed or is closed: nothing was sent.' }
+    }
+    const motivo = await mandaScelta(dip, eseguibile, { bot: destino.id, numero: voce.numero, nellItem, ...m })
+    if (motivo) return { stato: 'errore', motivo }
+    inviate = { ...(await caricaInviate()), [chiave]: { o: oi, quando } }
+    try {
+      await orca.storage.set(CHIAVE_INVIATE, inviate)
+    } catch (e) {
+      orca.log('scelte: ' + messaggio(e))
+    }
+    orca.log(`choice sent to ${destino.nome}: item ${voce.numero}, question ${qi + 1}, option ${oi + 1}`)
+    if (quadro) quadro.scelte = { ...(quadro.scelte ?? {}), [chiave]: { o: oi, quando } }
+    // Il bot aggiornerà l'item: la coda si rilegge presto, e la carta esce quando l'ha fatto.
+    chiedi(true)
+    return { stato: 'inviata', o: oi, quando }
   }
 
   /** Un giro alla volta: chi chiede mentre uno è in corso aspetta quello. */
@@ -323,6 +475,10 @@ export function avvia(orca: OrcaWorkerApi, dip: Dipendenze = dipendenzeVere()): 
   orca.panels.handle('regia.quadro', async () => quadro ?? (await aggiorna()))
   orca.panels.handle('regia.aggiorna', () => tutto())
   orca.panels.handle('regia.apri', (bersaglio) => apri(bersaglio))
+  // Un'opzione premuta nella coda: la scelta va al bot dell'impostazione, se c'è. Solo da un clic nel pannello, mai da un giro.
+  orca.panels.handle('regia.scelta', (chiesta) => scegli(chiesta))
+  // Il menu «Send choices to» della Queue: quale bot riceve le scelte. Non manda niente.
+  orca.panels.handle('regia.botScelte', (chiesta) => sceglieBot(chiesta))
   // L'immagine caricata di un bot. Il pannello dà solo l'id di un bot del quadro: si cerca tra le
   // foto già lette dalle case dei bot, e da qui non parte nessuna lettura di file.
   orca.panels.handle('regia.foto', async (chiesta) => {

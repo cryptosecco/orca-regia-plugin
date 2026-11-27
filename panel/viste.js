@@ -66,12 +66,14 @@ const apri = (bersaglio) =>
     ? ` data-apri="${e(JSON.stringify({ percorso: bersaglio.percorso || null, terminale: bersaglio.terminale || null }))}" title="${T.openInOrca}"`
     : ''
 
-// ---------- interattività: tutto in sola lettura ----------
+// ---------- interattività: in sola lettura, tranne le scelte della coda (data-scelta) ----------
 // Un elemento dice cosa fa al clic con un attributo, e regia.js lo esegue:
 // data-apri (porta Orca su una scheda, un terminale o la chat di un bot; con data-ripiego, dove andare
 // se Orca non lo trova), data-vai («coda»: la vista Coda; «bot:Nome»: scorre fin lì e la evidenzia), data-vista
 // (cambia vista), data-voce (apre e chiude la domanda di una voce della coda), data-corsia (richiude una
-// corsia), data-filtro-coda e data-filtro-progetto (i filtri della coda). data-info è il riquadro che compare
+// corsia), data-filtro-coda e data-filtro-progetto (i filtri della coda), data-scelta (un'opzione di una
+// domanda della coda: la manda al bot del menu «Send choices to», o copia e apre la chat), data-bot-scelte
+// (quel menu: sceglie il bot, non manda niente). data-info è il riquadro che compare
 // al passaggio del mouse e col fuoco da tastiera: la prima riga è il titolo.
 const bersaglio = (b) => e(JSON.stringify({ percorso: b.percorso || null, terminale: b.terminale || null }))
 const azApri = (b, ripiego = '') => (b && (b.percorso || b.terminale) ? ` data-apri="${bersaglio(b)}"${ripiego ? ` data-ripiego="${e(ripiego)}"` : ''}` : ripiego ? ` data-vai="${e(ripiego)}"` : '')
@@ -923,8 +925,9 @@ export function diagramma(q, ora, vista = {}) {
 
 // ---------- la coda: «Decidi adesso», i contatori, le corsie (per progetto, o per bot) ----------
 // Pallino, progetto, testo e scadenza di ogni voce li ha già letti il worker dal titolo (src/norma.ts).
-// Qui si disegna, in sola lettura: per rispondere si va nella chat del bot che ha l'item.
-const LETTERE = 'ABCDEFG'
+// Qui si disegna. Le opzioni di una domanda sono tasti: un clic manda la scelta al bot scelto nel menu
+// «Send choices to», mai da solo; senza un bot copia la risposta e apre la chat del bot che ha chiesto.
+const LETTERE = 'ABCDEFGH'
 const PRIORITA = T.coda.priority
 const STATO_BREVE = { needs_you: ['aspetta', T.stato.waitingOnYou], in_progress: ['lavoro', T.stato.inProgress], planned: ['previsto', T.stato.planned] }
 const SENZA_PROGETTO = T.coda.noProject
@@ -959,19 +962,103 @@ const scadenza = (v, ora) => {
 /** L'età di una voce: da quando è nata (o, se non si sa, dall'ultima attività). */
 const eta = (v, ora) => (v.nato || v.da ? durata((ora - (v.nato || v.da)) / 1000) : '')
 
+/** Le domande di una voce: `domande` dal worker. */
+const quesitiDi = (v) => (v.domanda && Array.isArray(v.domanda.domande) ? v.domanda.domande : [])
+
 /**
- * La domanda aperta di una voce con le sue opzioni, da leggere e basta. Il contesto (l'ultimo commento)
- * si mostra solo quando una domanda non c'è. `tag`: span dentro un tasto, div fuori.
+ * Dove si ricorda una scelta: la voce, l'evento della domanda (una domanda nuova è un evento nuovo) e quale
+ * domanda; per una domanda a più scelte anche l'opzione. La stessa chiave del worker (`chiaveScelta` in norma.ts).
  */
-function domanda(v, tag = 'div') {
+export const chiaveScelta = (uid, evento, q, o) => `${uid}:${evento}:${q}${o === undefined ? '' : ':' + o}`
+
+/**
+ * Gli esiti delle scelte per il disegno: quelle che il worker sa già inviate (`q.scelte`) e quelle di questo
+ * pannello (in invio, non riuscite, cambiate, copiate). Un'inviata del worker vince su tutto: è partita davvero.
+ */
+export function esitiDi(q, locali = {}) {
+  const fuori = { ...locali }
+  for (const [chiave, s] of Object.entries(q.scelte || {})) fuori[chiave] = { o: s.o, quando: s.quando, stato: 'inviata' }
+  return fuori
+}
+
+/** Il bot che riceve le scelte, quando nel menu «Send choices to» ce n'è uno che c'è; altrimenti null (il clic copia e apre la chat). */
+export const botScelte = (q) => (q.invioScelte && q.invioScelte.bot ? q.invioScelte.bot : null)
+
+/**
+ * Il testo della risposta copiato quando niente parte: come lo scriverebbe la risposta rapida di Orca
+ * («domanda → scelta» quando le domande sono più d'una), col numero dell'item davanti, perché nella chat
+ * le domande aperte possono essere tante. Null: quella scelta non c'è.
+ */
+export function testoRisposta(v, q, o) {
+  const quesiti = quesitiDi(v)
+  const opzione = quesiti[q] && quesiti[q].opzioni[o]
+  if (!opzione) return null
+  return T.coda.answerText(v.numero, quesiti.length > 1 ? quesiti[q].chiede : '', opzione.etichetta)
+}
+
+/** Le scelte di una domanda che hanno un esito: una sola per una domanda normale, una per opzione se se ne possono scegliere più d'una. */
+const esitiDomanda = (v, q, x, esiti) =>
+  (x.multi ? x.opzioni.map((_, i) => esiti[chiaveScelta(v.uid, v.domanda.evento, q, i)]) : [esiti[chiaveScelta(v.uid, v.domanda.evento, q)]]).filter((es) => es && x.opzioni[es.o])
+
+/** Cosa dice una domanda dopo il clic su una sua opzione. `bot` riceve le scelte; `chi` è il bot della voce, la cui chat si apre. */
+function esitoScelta(esito, opzione, bot, chi) {
+  const scelta = `«${e(opzione.etichetta)}»`
+  if (esito.stato === 'aperta') return `<p class="dopo-scelta c-aspetta" role="status">${T.coda.answerThere(scelta, e(chi))}${esito.copiata ? T.coda.copied : ''}</p>`
+  if (esito.stato === 'invio') return `<p class="dopo-scelta c-lavoro" role="status">${T.coda.sending(scelta, e(bot))}</p>`
+  if (esito.stato === 'inviata') return `<p class="dopo-scelta c-finito" role="status">${T.coda.sent(e(bot), esito.quando ? oraDi(esito.quando) : '', scelta)}</p>`
+  if (esito.stato === 'cambiata') return `<p class="dopo-scelta c-aspetta" role="status">${e(esito.motivo || T.coda.changed)}</p>`
+  // «Forse è partita» (il comando è stato fermato a metà, o l'attesa è scaduta): niente «riprova», prima si guarda la chat.
+  const motivo = esito.motivo || T.coda.unknownError
+  return `<p class="dopo-scelta c-errore" role="alert">${/may have reached/i.test(motivo) ? T.coda.notConfirmed(e(motivo)) : T.coda.notSent(e(motivo), e(chi))}</p>`
+}
+
+/**
+ * Le domande aperte di una voce: per ogni domanda (`--ask`) il suo testo e un tasto per opzione, con la
+ * consigliata in evidenza; più domande, un gruppo per domanda. Con un bot nel menu «Send choices to» (`bot`)
+ * un clic gli manda la scelta (regia.js, `regia.scelta` nel worker); senza, il clic non manda niente:
+ * copia la risposta e apre la chat del bot della voce (`verso`). Il tasto porta solo i numeri della scelta
+ * (voce, evento, domanda, opzione): nessun testo del bot finisce negli attributi. Mentre una scelta parte e
+ * dopo che è partita, i tasti di quella domanda sono spenti (di una domanda a più scelte, solo quello
+ * premuto): niente doppio invio. Una domanda senza opzioni resta testo. Il contesto (l'ultimo commento) si
+ * mostra solo quando una domanda non c'è. `dove` distingue i tasti della stessa voce in «Decide now» e
+ * nella sua corsia; `esiti` sono le scelte con un esito, per `chiaveScelta`.
+ */
+function domanda(v, dove, esiti, bot, verso) {
   const d = v.domanda
-  if (!d || !(d.chiede || d.contesto)) return `<${tag} class="chiede muto">${T.coda.noQuestion}</${tag}>`
-  if (!d.chiede) return `<${tag} class="contesto">${e(d.contesto)}</${tag}>`
-  const opzioni = d.opzioni.length
-    ? `<${tag} class="opz" role="list">${d.opzioni.map((o, i) => `<span class="op${d.consigliata === i ? ' si' : ''}" role="listitem"><b class="lettera">${LETTERE[i] || '·'}</b><span>${e(o)}</span>${d.consigliata === i ? `<span class="consigliata">${T.coda.recommended}</span>` : ''}</span>`).join('')}</${tag}>`
-    : ''
-  const altre = d.altre ? ` <span class="muto">${T.coda.andMoreQuestions(plurale(d.altre, ...T.n.moreQuestion))}</span>` : ''
-  return `<${tag} class="chiede">${e(d.chiede)}${altre}</${tag}>${opzioni}`
+  const quesiti = quesitiDi(v)
+  if (!d || !(quesiti.length || d.contesto)) return `<p class="chiede muto">${T.coda.noQuestion}</p>`
+  if (!quesiti.length) return `<p class="contesto">${e(d.contesto)}</p>`
+  const molti = quesiti.length > 1
+  const chi = v.bot || ''
+  return `<div class="quesiti">${quesiti
+    .map((x, q) => {
+      const fatti = esitiDomanda(v, q, x, esiti || {})
+      const ferma = (es) => es && (es.stato === 'invio' || es.stato === 'inviata')
+      const tasti = x.opzioni.map((o, i) => {
+        const si = x.consigliata === i
+        const suo = fatti.find((es) => es.o === i)
+        const spento = x.multi ? ferma(suo) : fatti.some(ferma)
+        const premuta = suo && suo.stato !== 'cambiata'
+        const fa = suo && suo.stato === 'inviata' ? T.coda.sentTo(bot) : bot ? T.coda.sendsTo(bot) : T.coda.copiesAndOpens(chi)
+        const dice = `${LETTERE[i] || '·'}: ${o.etichetta}${si ? ` (${T.coda.recommended})` : ''}. ${fa}`
+        return `<button type="button" class="scelta${si ? ' si' : ''}${premuta ? ` premuta ${suo.stato}` : ''}" data-scelta="${e(v.uid)}" data-evento="${e(d.evento)}" data-q="${q}" data-o="${i}"${bot ? '' : verso.azione} data-k="scelta:${dove}:${e(v.uid)}:${q}:${i}" title="${e(dice)}"${spento ? ' disabled' : ''}${premuta ? ' aria-current="true"' : ''}><b class="lettera" aria-hidden="true">${LETTERE[i] || '·'}</b><span class="op-testo">${e(o.etichetta)}${o.dettaglio ? `<span class="spiega">${e(o.dettaglio)}</span>` : ''}</span>${suo && suo.stato === 'inviata' ? '<span class="spunta" aria-hidden="true">✓</span>' : si ? `<span class="consigliata">${T.coda.recommended}</span>` : ''}</button>`
+      })
+      const nota = x.multi ? `<p class="muto nota-multi">${bot ? T.coda.pickManyEach(e(bot)) : T.coda.pickMany}</p>` : ''
+      return `<div class="quesito" role="group" aria-label="${e(x.chiede)}"><p class="chiede">${molti ? `<b class="num">${q + 1}.</b> ` : ''}${e(x.chiede)}</p>${tasti.length ? `<div class="scelte">${tasti.join('')}</div>${nota}` : ''}${fatti.map((es) => esitoScelta(es, x.opzioni[es.o], bot || '', chi)).join('')}</div>`
+    })
+    .join('')}</div>`
+}
+
+/**
+ * Il menu «Send choices to», sotto «Decide now»: nessuno (il default: il clic copia e apre la chat) o uno
+ * dei bot di Orca, per id. Sceglierne uno non manda niente: dice solo a chi va il prossimo clic su
+ * un'opzione. Si salva nello storage del plugin (regia.js → `regia.botScelte` nel worker).
+ */
+function menuScelte(q) {
+  const bots = (q.bot || []).filter((b) => !b.soloMotore && /^[0-9a-f-]{36}$/i.test(b.id))
+  if (!bots.length) return ''
+  const scelto = q.invioScelte && q.invioScelte.id ? q.invioScelte.id.toLowerCase() : ''
+  return `<div class="invio-scelte"><label class="scegli" title="${e(T.coda.menuHint)}"><span class="suono">${T.coda.sendChoicesTo}</span><select data-bot-scelte data-k="bot-scelte"${scelto ? ' class="scelto"' : ''}><option value=""${scelto ? '' : ' selected'}>${T.coda.sendChoicesTo}: ${T.coda.nobody}</option>${bots.map((b) => `<option value="${e(b.id)}"${b.id.toLowerCase() === scelto ? ' selected' : ''}>${T.coda.sendChoicesTo}: ${e(b.nome)}</option>`).join('')}</select></label></div>`
 }
 
 /** Dove si risponde a una voce: la chat del bot che ce l'ha. Se Orca non la trova (o non si sa dov'è), la sua scheda nella Panoramica. */
@@ -981,23 +1068,27 @@ const versoChat = (q, v) => {
   return { azione: azApri(chat, 'bot:' + nome), dice: chat ? T.coda.answerIn(nome) : T.coda.goCard(nome) }
 }
 
-/** Una decisione in cima: tutta la carta è un tasto che apre la chat del bot. Qui non si risponde. */
-function decisione(v, ora, verso) {
+/**
+ * Una decisione in cima: la testa (progetto, scadenza, titolo) è un tasto che apre la chat del bot, sotto
+ * ci sono le domande coi loro tasti, in fondo il link alla chat. Una carta senza opzioni lo mostra sempre.
+ */
+function decisione(v, ora, verso, esiti, bot) {
   const da = eta(v, ora)
-  return `<li class="dec p${v.priorita}"><button type="button" class="dec-tasto"${verso.azione} data-k="dec:${e(v.uid)}" title="${e(verso.dice)}">
+  const conTasti = quesitiDi(v).some((x) => x.opzioni.length)
+  return `<li class="dec p${v.priorita}${conTasti ? ' con-tasti' : ''}"><button type="button" class="dec-tasto"${verso.azione} data-k="dec:${e(v.uid)}" title="${e(verso.dice)}">
     <span class="dec-testa">${pallino(v)}<span class="prog taglia">${e(nomeCorsia(v.progetto))}</span>${scadenza(v, ora)}</span>
     <span class="dec-cosa">${e(v.testo)}</span>
-    ${domanda(v, 'span')}
-    <span class="dec-piede">${da ? `<span class="muto num">${T.coda.open(da)}</span>` : ''}<span class="va">${e(verso.dice)} ›</span></span>
-  </button></li>`
+  </button>
+  <div class="dec-domande">${domanda(v, 'dec', esiti, bot, verso)}</div>
+  <div class="dec-piede">${da ? `<span class="muto num">${T.coda.open(da)}</span>` : ''}<button type="button" class="va collega"${verso.azione} data-k="va:${e(v.uid)}">${e(verso.dice)} ›</button></div></li>`
 }
 
 /** Una voce in corsia: pallino, testo senza il progetto, stato breve, età, scadenza. Un clic apre la domanda. */
-function voceCorsia(v, ora, aperta, verso) {
+function voceCorsia(v, ora, aperta, verso, esiti, bot) {
   const [k, testo] = STATO_BREVE[v.stato] || [chiave((STATO_ITEM[v.stato] || ['fermo'])[0]), (STATO_ITEM[v.stato] || [0, v.stato])[1]]
   const da = eta(v, ora), id = `task-${v.numero}`
   return `<li class="voce p${v.priorita}${v.conPallino || v.priorita < 3 ? '' : ' grigia'}${aperta ? ' aperta' : ''}"><button type="button" class="voce-testa" data-voce="${e(v.uid)}" data-k="voce:${e(v.uid)}" aria-expanded="${aperta ? 'true' : 'false'}" aria-controls="${id}">${pallino(v)}<span class="cosa">${e(v.testo)}</span><span class="sotto"><span class="st c-${k}">${e(testo)}</span>${da ? `<span class="num">${T.coda.open(da)}</span>` : ''}${scadenza(v, ora)}</span></button>
-    <div class="dettaglio" id="${id}"${aperta ? '' : ' hidden'}>${domanda(v)}${v.chi ? `<div class="muto">${e(v.chi)}</div>` : ''}<button type="button" class="collega"${verso.azione}>${e(verso.dice)} ›</button></div></li>`
+    <div class="dettaglio" id="${id}"${aperta ? '' : ' hidden'}>${domanda(v, 'voce', esiti, bot, verso)}${v.chi ? `<div class="muto">${e(v.chi)}</div>` : ''}<button type="button" class="collega"${verso.azione}>${e(verso.dice)} ›</button></div></li>`
 }
 
 const FILTRI = { oggi: (v) => v.oggi, decidere: (v) => v.stato === 'needs_you', corso: (v) => v.stato === 'in_progress' }
@@ -1041,12 +1132,14 @@ export function coda(q, ora, vista = {}) {
   const filtro = vista.filtro in FILTRI ? vista.filtro : ''
   const progetto = typeof vista.progetto === 'string' && c.progetti.includes(vista.progetto) ? vista.progetto : undefined
   const chiuse = new Set(vista.chiuse || []), aperte = new Set(vista.aperte || [])
+  const esiti = esitiDi(q, vista.esiti || {})
+  const bot = botScelte(q)
   const fila = corsie(c, filtro, progetto)
   const quante = fila.reduce((n, x) => n + x.voci.length, 0)
 
   const decidi = prime.length
-    ? `<ol class="decidi">${prime.map((v) => decisione(v, ora, verso(v))).join('')}</ol>
-      <p class="sola-lettura muto">${T.coda.readOnly(c.diTutti ? T.coda.theBot : e(c.bot))}${c.aspettano > prime.length ? T.coda.otherWait(c.aspettano - prime.length) : ''}</p>`
+    ? `<ol class="decidi">${prime.map((v) => decisione(v, ora, verso(v), esiti, bot)).join('')}</ol>
+      <p class="sola-lettura muto">${bot ? T.coda.choicesGo(e(bot)) : q.invioScelte && q.invioScelte.manca ? T.coda.choicesBotMissing(e(q.invioScelte.manca)) : T.coda.readOnly(c.diTutti ? T.coda.theBot : e(c.bot))}${c.aspettano > prime.length ? T.coda.otherWait(c.aspettano - prime.length) : ''}</p>`
     : `<div class="quieto"><b>${T.coda.nothingToDecideToday}</b><span>${T.coda.whenChoice(c.diTutti ? T.coda.itShowsUp : T.coda.botPutsIt(e(c.bot)))}</span></div>`
 
   const tasto = (id, nome, n) => `<button type="button" data-filtro-coda="${id}" data-k="filtro:${id || 'tutto'}" aria-pressed="${filtro === id && (id || progetto === undefined)}">${nome} <b class="num">${n}</b></button>`
@@ -1058,7 +1151,7 @@ export function coda(q, ora, vista = {}) {
     const urgenti = [0, 1].map((p) => [p, x.voci.filter((v) => v.priorita === p).length]).filter(([, n]) => n)
     const id = 'corsia-' + (c.progetti.indexOf(x.progetto) + 1)
     return `<section class="corsia${chiusa ? ' chiusa' : ''}"><h3><button type="button" class="corsia-testa" data-corsia="${e(x.progetto)}" data-k="corsia:${e(x.progetto)}" aria-expanded="${chiusa ? 'false' : 'true'}" aria-controls="${id}"><span class="apre" aria-hidden="true">${chiusa ? '▸' : '▾'}</span><span class="nome taglia">${e(x.nome)}</span>${urgenti.length ? `<span class="urgenti">${urgenti.map(([p, n]) => `<span class="u" title="${n} ${PRIORITA[p]}"><span class="pal p${p}" aria-hidden="true"></span><span class="num">${n}</span><span class="suono"> ${PRIORITA[p]}</span></span>`).join('')}</span>` : ''}<span class="quanti num" title="${plurale(x.aperti, ...T.n.openItem)}">${x.voci.length === x.aperti ? x.aperti : T.coda.nOf(x.voci.length, x.aperti)}</span></button></h3>
-      <ol class="voci" id="${id}"${chiusa ? ' hidden' : ''}>${x.voci.map((v) => voceCorsia(v, ora, aperte.has(v.uid), verso(v))).join('')}</ol></section>`
+      <ol class="voci" id="${id}"${chiusa ? ' hidden' : ''}>${x.voci.map((v) => voceCorsia(v, ora, aperte.has(v.uid), verso(v), esiti, bot)).join('')}</ol></section>`
   }
   const vuoto = `<div class="quieto"><b>${NIENTE[filtro]}${progetto === undefined ? '' : T.coda.inLane(e(nomeCorsia(progetto)))}</b><span><button type="button" class="collega" data-filtro-coda="">${T.coda.showWhole}</button></span></div>`
 
@@ -1066,6 +1159,7 @@ export function coda(q, ora, vista = {}) {
     <section class="vc-decidi" id="decidi" tabindex="-1" aria-label="${T.coda.decideNow}">
       <h2>${T.coda.decideNow}${prime.length ? ` <small class="num">${c.aspettano > prime.length ? T.coda.nOf(prime.length, c.aspettano) : prime.length}</small>` : ''}</h2>
       ${decidi}
+      ${menuScelte(q)}
     </section>
     <section class="vc-tutto" aria-label="${T.coda.wholeBy(cosa)}">
       ${contatori(c, filtro)}

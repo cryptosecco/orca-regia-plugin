@@ -1,8 +1,8 @@
 # Regia
 
-A read-only control room for your [Orca](https://github.com/stablyai/orca) bots, in a panel of the right sidebar. It answers four questions without opening a chat: what is waiting on you, what is in the queue, who is working on what, and how work flows between bots, workers and pull requests.
+A control room for your [Orca](https://github.com/stablyai/orca) bots, in a panel of the right sidebar. It answers four questions without opening a chat: what is waiting on you, what is in the queue, who is working on what, and how work flows between bots, workers and pull requests.
 
-It only shows. It never answers a bot, writes to an agent or a terminal, or presses a permission for you. A click takes Orca to a chat, a terminal or a workspace.
+It only shows, with one exception you turn on yourself: if you pick a bot in the Queue's **Send choices to** menu, a click on an option of a question sends your choice to that bot, once. With nobody picked (the default) it sends nothing, ever. It never writes to an agent or a terminal, never answers an item by itself, and never presses a permission for you. Any other click takes Orca to a chat, a terminal or a workspace.
 
 ![The Overview: you at the top, the bot that holds the queue, the other bots, the agents they started and the pull requests](assets/overview-dark.webp)
 
@@ -13,7 +13,7 @@ The pictures on this page are mock-ups: the panel itself, on invented bots and p
 | View | What it shows |
 |---|---|
 | **Overview** | A diagram of who hands work to whom: you, the bots, the agents each bot started, the pull requests. Dashes flow toward whoever receives the work; amber means something waits on you. Below it, one card per bot: what it is doing now, its open items, the agents it started, its next automation, the last thing it said. |
-| **Queue** | "Decide now": up to five items that wait on your answer, with the question and its options. Then every open item in lanes, by priority and deadline. |
+| **Queue** | "Decide now": up to five items that wait on your answer, each question with its options as buttons (the recommended one marked). Then every open item in lanes, by priority and deadline. See "Choices" below for what a button does. |
 | **Flows** | The same diagram, and the recent messages between bots, coordinators and workers: subject and first line. |
 | **Office** | A map seen from above: one room per project, one avatar per bot and agent. A bot is one avatar however many chats it has, showing its most active one; the workers it started are agents of their own. Who is working sits at a desk, who waits on you has a question mark, the others rest on the couch. A click on an avatar opens its card, with the button for its chat or terminal. The list of before is one click away ("list"). |
 
@@ -52,18 +52,22 @@ It asks Orca for six capabilities:
 | `agent:read` | hearing when an agent's status changes, to refresh at once |
 | `workspace:write` | the click: show a workspace, focus a terminal, show the right sidebar. Nothing else is written |
 | `notifications:show` | the desktop notification; a setting turns it off |
-| `storage:own` | remembering which waits you were already told about, and which lanes you collapsed |
+| `storage:own` | remembering which waits you were already told about, which lanes you collapsed, which bot receives your choices, and which choices were already sent |
 | `settings:own` | reading the settings below |
 
 ### What it reads
 
-- **The `orca` CLI**, one command at a time, from a fixed list of eight read commands: `bot list`, `bot item list`, `bot work list`, `bot chats`, `worktree ps`, `automations list`, `orchestration inbox`, `orchestration worker-list`. A bot enters a command only by its id.
+- **The `orca` CLI**, one command at a time, from a fixed list of nine read commands: `bot list`, `bot item list`, `bot work list`, `bot chats`, `worktree ps`, `automations list`, `orchestration inbox`, `orchestration worker-list`, and `bot item show <number>` (only right before sending a choice). A bot enters a command only by its id.
 - **`~/.orca/bots/<bot>/bot.json`**, for the bot's id, name and avatar; and the bot's uploaded picture in that folder, if it has one (up to 1 MB, checked to be a real image, links refused).
 - **Orca's own mascot pictures**, from the Orca app on your machine, for bots that use one. The plugin does not ship them.
 - **`~/orca/sandbox/`, only if that folder exists**: the status files in `attive/` (only `*.json`, up to 64 kB each, links refused) and, when you open a finished run, its log in `registri/` (only a `.log` file named by that run's status file, up to 512 kB). See "The audit sandbox". If the folder is not there, nothing in it is read or watched.
 - **Nothing else.** In particular, no file of your projects.
 
 Messages between agents are read whole by the worker and cut to subject and first line before anything is shown or stored. Prompts, tool input and terminal previews are dropped.
+
+### What it sends, and only when you ask
+
+One command writes, and only when you picked a bot in the Queue's **Send choices to** menu and you click an option of a question: `orca orchestration send --from regia --to bot:<id> [--item <number>] --type status --subject "Regia · choice · item <number>" --body-file -`. It sends a status message to that bot (in the item's chat when the item is that bot's, in its Home chat otherwise) with the item, the question, the option you clicked with its exact label, and the time. The text comes only from the item as Orca has it, read again a moment before; the message body goes on standard input, never on the command line. No capability covers this: it is the CLI the plugin already runs. See "Choices".
 
 ### What it never does
 
@@ -87,6 +91,17 @@ Everything works with nothing set. Settings → Plugins → Regia:
 | **Bots not there yet** | empty | Names shown dashed in the diagram until a bot with that name exists. |
 | **State file (optional)** | empty | See "The optional state file" below. Empty: off. |
 | **Orca CLI executable** | empty | Only if `orca` is somewhere unusual. Empty: Orca's own CLI, then `orca` on the PATH. |
+
+### Choices
+
+In the Queue every option of a question is a button, one per line, with the recommended one marked. An item with several questions gets one group of buttons per question.
+
+The bot that receives your choices is picked in the Queue, in the **Send choices to** menu under "Decide now": nobody (the default) or one of your bots. The pick is kept in the plugin's own storage; picking a bot sends nothing.
+
+- **Nobody picked (the default).** Nothing is sent. A click marks your choice on the card, copies the answer to the clipboard when the panel is allowed to ("Item 12: One more review round"), and opens the chat of the bot that asked, where you paste or write it.
+- **A bot picked.** A click sends your choice to that bot as a status message, once: the item, the question, the option with its exact label, the time. The plugin first reads the item again; if the question changed or the item no longer waits on you, nothing is sent and the card says so. While it goes out and afterwards the buttons of that question are off; the card shows "Sending…", then "✓ Sent to <bot> at 10:42", or "Not sent: <why>" and you can try again. A choice is remembered (in the plugin's storage) until the item stops waiting on you or asks something else, so a double click, a second panel or a restart never sends it twice. The card stays until the bot updates the item.
+- It is up to the bot to record the choice on the item; Orca gives plugins no way to answer an item for you. Nothing is ever chosen for you, not even the recommended option.
+- A question you can answer with several options sends each option on its own.
 
 ### Titles
 

@@ -147,13 +147,23 @@ test('settings: the defaults assume nothing, and odd values fall back to them', 
 
 // ---------- the worker, on a stand-in Orca and stand-in files ----------
 
-type Finte = { dip: Dipendenze; lanci: string[][]; letti: string[]; guardati: string[]; timer: { ms: number; fn: () => void }[]; elencati: string[]; byte: string[] }
+type Finte = { dip: Dipendenze; lanci: string[][]; letti: string[]; guardati: string[]; timer: { ms: number; fn: () => void }[]; elencati: string[]; byte: string[]; invii: { argomenti: string[]; ingresso: string }[] }
 const SB = HOME + '/orca/sandbox'
 /** `sandbox`: files under ~/orca/sandbox by relative path (`attive/<id>.json`, `registri/<name>.log`); without it there is no sandbox. */
 function finte(file: Record<string, string> = {}, sandbox?: Record<string, string>): Finte {
   const cli = demoCli(NOW) as Record<string, unknown>
   const homes = demoHomes() as Record<string, unknown>
   const lanci: string[][] = [], letti: string[] = [], guardati: string[] = [], timer: { ms: number; fn: () => void }[] = [], elencati: string[] = [], byte: string[] = []
+  // The only commands that write (a choice sent to the bot of the «Send choices to» menu): arguments and standard input.
+  const invii: { argomenti: string[]; ingresso: string }[] = []
+  // `bot item show <n>`: the item as the demo lists it, with its owner, as Orca gives it.
+  const item1 = (n: string) => {
+    for (const b of Object.values(BOTS)) {
+      const i = ((cli[`bot item list --bot ${b.id}`] as any)?.items ?? []).find((x: any) => String(x.number) === n)
+      if (i) return { item: { ...i, owner: { botId: b.id, name: b.name } }, events: [] }
+    }
+    return undefined
+  }
   const nelSb = (p: string) => (sandbox && p.startsWith(SB + '/') ? sandbox[p.slice(SB.length + 1)] : undefined)
   const dip: Dipendenze = {
     casa: HOME,
@@ -162,8 +172,14 @@ function finte(file: Record<string, string> = {}, sandbox?: Record<string, strin
     lancia: async (_eseguibile, argomenti) => {
       lanci.push(argomenti)
       const chiave = argomenti.filter((a) => a !== '--json').join(' ')
+      const uno = /^bot item show (\d+)$/.exec(chiave)
+      if (uno && item1(uno[1])) return JSON.stringify({ ok: true, result: item1(uno[1]) })
       if (!(chiave in cli)) throw new Error('no such command in the demo: ' + chiave)
       return JSON.stringify({ ok: true, result: cli[chiave] })
+    },
+    lanciaCon: async (_eseguibile, argomenti, ingresso) => {
+      invii.push({ argomenti, ingresso })
+      return JSON.stringify({ ok: true, result: { messageId: 'msg_demo' } })
     },
     leggiFile: async (percorso) => {
       letti.push(percorso)
@@ -204,7 +220,7 @@ function finte(file: Record<string, string> = {}, sandbox?: Record<string, strin
       return { chiudi() {} }
     }
   }
-  return { dip, lanci, letti, guardati, timer, elencati, byte }
+  return { dip, lanci, letti, guardati, timer, elencati, byte, invii }
 }
 
 let attivo: { deactivate(): Promise<void> | void } | undefined
@@ -212,10 +228,11 @@ afterEach(async () => {
   await attivo?.deactivate()
   attivo = undefined
 })
-async function monta(f: Finte, settings: Record<string, unknown> = {}) {
+async function monta(f: Finte, settings: Record<string, unknown> = {}, storage: Record<string, any> = {}) {
   const host = mockHost({
     results: { 'workspace.list': { workspaces: [], truncated: false }, 'terminal.focus': { focused: true }, 'workspace.open': { opened: true }, 'commands.run': { ran: true }, 'notifications.show': { delivered: true }, 'statusBar.update': { ok: true } },
-    settings
+    settings,
+    storage
   })
   const worker = await mountWorker({ default: (orca) => avvia(orca, f.dip), deactivate }, { host, events: ['agent.status.changed', 'workspace.changed', 'workspace.created', 'workspace.removed'], commands: ['show'] })
   attivo = worker
@@ -410,10 +427,11 @@ test('hostile text in any field of the picture comes out escaped in every view',
     if (x && typeof x === 'object') return Object.fromEntries(Object.entries(x).map(([k, v]) => [k, avvelena(v, k)]))
     return x
   }
-  for (const base of [quadro(), quadro({ codaBot: 'Atlas' }), quadro({ codaBot: 'Nobody' }), conStato(12 * MIN), quadro({}, { sandbox: sandboxDemo() })]) {
+  const scelte = (q: any) => ({ ...q, invioScelte: { bot: 'Atlas' } })
+  for (const base of [quadro(), quadro({ codaBot: 'Atlas' }), quadro({ codaBot: 'Nobody' }), conStato(12 * MIN), quadro({}, { sandbox: sandboxDemo() }), scelte(quadro({ codaBot: 'Atlas' })), { ...quadro(), invioScelte: { manca: 'Nobody' } }]) {
     const q = avvelena(base) as any
     // The lanes are keyed by project name: keep the keys consistent after poisoning.
-    const html = [V.fonti(q, NOW), V.piede(q), V.tabellone(q, {}), V.tabellone(q, { aperto: 'lavoro' }), V.panoramica(q, NOW, {}), V.coda(q, NOW, { aperte: q.coda.voci.map((v: any) => v.uid) }), V.flussi(q, NOW, { tutti: true }), V.ufficio(q, NOW, {}), V.ufficio(q, NOW, { lista: true }), V.ufficio(q, NOW, { scelto: 'term_demo_rate' }), V.incroci(q), JSON.stringify(V.schede(q)), ...(q.sandbox ? q.sandbox.prove.map((p: any) => V.schedaProva(q, NOW, { prova: p.id, registro: { stato: 'pronto', nome: p.registro, testo: p.comando } })) : [])].join('\n')
+    const html = [V.fonti(q, NOW), V.piede(q), V.tabellone(q, {}), V.tabellone(q, { aperto: 'lavoro' }), V.panoramica(q, NOW, {}), V.coda(q, NOW, { aperte: q.coda.voci.map((v: any) => v.uid) }), V.coda(q, NOW, { esiti: Object.fromEntries(q.coda.voci.filter((v: any) => v.domanda?.domande?.[0]?.opzioni?.length).flatMap((v: any) => [[`${v.uid}:${v.domanda.evento}:0`, { o: 0, stato: 'errore', motivo: veleno }]])) }), V.flussi(q, NOW, { tutti: true }), V.ufficio(q, NOW, {}), V.ufficio(q, NOW, { lista: true }), V.ufficio(q, NOW, { scelto: 'term_demo_rate' }), V.incroci(q), JSON.stringify(V.schede(q)), ...(q.sandbox ? q.sandbox.prove.map((p: any) => V.schedaProva(q, NOW, { prova: p.id, registro: { stato: 'pronto', nome: p.registro, testo: p.comando } })) : [])].join('\n')
     assert.ok(html.length > 5000)
     for (const vivo of ['<img src=x', '<script>alert', 'onerror=alert(1)>']) assert.equal(html.includes(vivo), false, vivo)
     // It is there, escaped: the test would mean nothing if the text were simply dropped.
@@ -593,4 +611,134 @@ test('with a state file: an agent that touched a bot\'s files from a project sta
   // One avatar, working (the working chat counts more than an old one in error), with the sub-agents of all its sessions.
   assert.deepEqual(q.progetti.flatMap((p) => p.agenti.filter((a) => a.bot)).map((a) => [a.nome, a.stato, a.subAttivi, a.subConclusi]), [['Bot1', 'al lavoro', 1, 3]])
   assert.equal(q.conteggi.agenti, 2)
+})
+
+// ---------- the queue's options are buttons; a click sends a choice only to a bot the person picked ----------
+
+const ATLAS = BOTS.atlas.id
+/** Atlas's item 12, as the queue keys it when every bot's items are shown. */
+const DODICI = { item: `${ATLAS}:demo-12`, evento: 'ev-12', q: 0, o: 1 }
+/** The «Send choices to» menu set to a bot, as the plugin's storage keeps it. */
+const scelto = (b: { id: string; name: string }) => ({ 'scelte.bot': { id: b.id, nome: b.name } })
+
+test('the manifest adds nothing to what 0.8.4 contributed: same capabilities, execution, settings, commands, panels, events', async () => {
+  // The bot that receives choices is picked in the panel and kept in the plugin's storage, not in a setting:
+  // a new setting would count as more access, and Orca would ask everyone to approve the update again.
+  const { readFileSync } = await import('node:fs')
+  const m = JSON.parse(readFileSync(new URL('../orca-plugin.json', import.meta.url), 'utf8'))
+  assert.equal(m.execution, 'trusted-worker')
+  assert.deepEqual(m.capabilities.map((c: { kind: string }) => c.kind).sort(), ['agent:read', 'notifications:show', 'settings:own', 'storage:own', 'workspace:read', 'workspace:write'])
+  assert.deepEqual(m.contributes.settings.map((x: { key: string }) => x.key), ['queueBot', 'titleFormat', 'laneOrder', 'animations', 'notifications', 'refreshSeconds', 'expectedBots', 'stateFile', 'orcaCli'])
+  assert.deepEqual(Object.keys(m.contributes).sort(), ['commands', 'events', 'panels', 'settings', 'statusBarItems'])
+})
+
+test('choices, no bot picked: a click sends nothing; the panel copies the answer and opens the chat', async () => {
+  const f = finte()
+  const { worker } = await monta(f)
+  const q = await worker.request('regia.aggiorna')
+  assert.equal(q.invioScelte, null)
+  assert.deepEqual(await worker.request('regia.scelta', DODICI), { stato: 'spento' })
+  // Nothing was even read: no `bot item show`, and nothing written.
+  assert.equal(f.lanci.some((a) => a[2] === 'show'), false)
+  assert.equal(f.invii.length, 0)
+  // The view: buttons that copy and open the chat of the bot that asked, and say so; the menu says nobody.
+  const V = await import('../panel/viste.js')
+  const html = V.coda(q, NOW)
+  const tasti: string[] = html.match(/<button type="button" class="scelta[^>]*>/g) ?? []
+  assert.ok(tasti.length >= 4, String(tasti.length))
+  for (const t of tasti) assert.ok(t.includes('data-apri=') && t.includes('Nothing is sent from here: copies your answer and opens'), t)
+  assert.ok(html.includes("Nothing is sent from here: a choice copies your answer and opens the bot's chat, where you answer."))
+  assert.ok(html.includes('<select data-bot-scelte data-k="bot-scelte"><option value="" selected>Send choices to: nobody: copy and open the chat</option>'))
+  assert.equal((html.match(/<option value="a0000000-[^"]*">Send choices to: /g) ?? []).length, 6)
+  assert.equal(V.testoRisposta(q.coda.voci.find((v: any) => v.uid === DODICI.item), 0, 1), 'Item 12: One more review round')
+})
+
+test('the Send choices to menu: a bot of Orca or nobody, kept in the plugin\'s storage; picking one sends nothing', async () => {
+  const f = finte()
+  const { host, worker } = await monta(f)
+  await worker.request('regia.aggiorna')
+  assert.deepEqual(await worker.request('regia.botScelte', { bot: ATLAS }), { invioScelte: { bot: 'Atlas', id: ATLAS } })
+  assert.deepEqual(host.data().storage['scelte.bot'], { id: ATLAS, nome: 'Atlas' })
+  assert.deepEqual((await worker.request('regia.quadro')).invioScelte, { bot: 'Atlas', id: ATLAS })
+  // Something that is not one of Orca's bots changes nothing.
+  for (const male of [{ bot: 'a0000000-0000-4000-8000-000000000099' }, { bot: 'Atlas' }, { bot: '--to' }, { bot: 7 }, null, 'x']) {
+    assert.ok('errore' in (await worker.request('regia.botScelte', male as any)), JSON.stringify(male))
+  }
+  assert.deepEqual(host.data().storage['scelte.bot'], { id: ATLAS, nome: 'Atlas' })
+  // Nobody: back to copy and open.
+  assert.deepEqual(await worker.request('regia.botScelte', { bot: '' }), { invioScelte: null })
+  assert.equal(host.data().storage['scelte.bot'], null)
+  assert.deepEqual(await worker.request('regia.scelta', DODICI), { stato: 'spento' })
+  assert.equal(f.invii.length, 0)
+  // The view with a bot picked: that bot selected, the line says where choices go.
+  const V = await import('../panel/viste.js')
+  const html = V.coda({ ...quadro(), invioScelte: { bot: 'Atlas', id: ATLAS } }, NOW)
+  assert.ok(html.includes(`<select data-bot-scelte data-k="bot-scelte" class="scelto"><option value="">Send choices to: nobody: copy and open the chat</option><option value="${ATLAS}" selected>Send choices to: Atlas</option>`))
+})
+
+test('choices to the bot that owns the item: one status message in the item\'s chat, sent once', async () => {
+  const f = finte()
+  const { host, worker } = await monta(f, {}, scelto(BOTS.atlas))
+  const q = await worker.request('regia.aggiorna')
+  assert.deepEqual(q.invioScelte, { bot: 'Atlas', id: ATLAS })
+  const [a, b] = await Promise.all([worker.request('regia.scelta', DODICI), worker.request('regia.scelta', DODICI)])
+  assert.deepEqual(a, { stato: 'inviata', o: 1, quando: NOW })
+  assert.deepEqual(b, a)
+  assert.equal(f.invii.length, 1)
+  assert.deepEqual(f.invii[0].argomenti, ['orchestration', 'send', '--from', 'regia', '--to', `bot:${ATLAS}`, '--item', '12', '--type', 'status', '--subject', 'Regia · choice · item 12', '--body-file', '-', '--json'])
+  const righe = f.invii[0].ingresso.split('\n')
+  for (const r of ['Your owner chose this with one click in the Regia queue: no typed text.', 'Question: Ship the pricing page with the new copy?', 'Choice: B · «One more review round»', "Please record it on item 12 as your owner's answer."]) assert.ok(righe.includes(r), r)
+  assert.ok(righe.some((r) => r.startsWith('Item: 12 · ') && r.includes('Approve the pricing page copy')))
+  // Another click on the same question sends nothing more; the picture and the plugin's storage remember it.
+  assert.deepEqual(await worker.request('regia.scelta', { ...DODICI, o: 0 }), { stato: 'inviata', o: 1, quando: NOW, gia: true })
+  assert.equal(f.invii.length, 1)
+  assert.deepEqual((await worker.request('regia.quadro')).scelte, { [`${ATLAS}:demo-12:ev-12:0`]: { o: 1, quando: NOW } })
+  assert.deepEqual(host.data().storage['scelte.inviate'], { [`${ATLAS}:demo-12:ev-12:0`]: { o: 1, quando: NOW } })
+  // The view: buttons that send, and the line that says so.
+  const V = await import('../panel/viste.js')
+  const html = V.coda({ ...q, scelte: undefined }, NOW)
+  for (const t of html.match(/<button type="button" class="scelta[^>]*>/g) ?? []) assert.ok(!t.includes('data-apri=') && t.includes('Sends your choice to Atlas.'), t)
+  assert.ok(html.includes('A choice goes to Atlas as your answer, to record on the item. Nothing is sent without your click.'))
+})
+
+test('choices to a bot that does not own the item: its Home chat, with the owner named', async () => {
+  const f = finte()
+  const { worker } = await monta(f, {}, scelto(BOTS.atlas))
+  await worker.request('regia.aggiorna')
+  const esito = await worker.request('regia.scelta', { item: `${BOTS.sage.id}:demo-6`, evento: 'ev-s6', q: 0, o: 0 })
+  assert.equal(esito.stato, 'inviata')
+  assert.deepEqual(f.invii[0].argomenti, ['orchestration', 'send', '--from', 'regia', '--to', `bot:${ATLAS}`, '--type', 'status', '--subject', 'Regia · choice · item 6', '--body-file', '-', '--json'])
+  assert.ok(f.invii[0].ingresso.split('\n').includes('Item of: Sage'))
+})
+
+test('choices to a picked bot that is gone: nothing is sent, and the panel says why', async () => {
+  const f = finte()
+  const { worker } = await monta(f, {}, { 'scelte.bot': { id: 'a0000000-0000-4000-8000-000000000099', nome: 'Quill' } })
+  const q = await worker.request('regia.aggiorna')
+  assert.deepEqual(q.invioScelte, { manca: 'Quill' })
+  const esito = await worker.request('regia.scelta', DODICI)
+  assert.equal(esito.stato, 'errore')
+  assert.match(esito.motivo, /“Quill” \(Send choices to\) is no longer one of Orca's bots: nothing was sent\./)
+  assert.equal(f.invii.length, 0)
+  const V = await import('../panel/viste.js')
+  const html = V.coda(q, NOW)
+  assert.ok(html.includes("“Quill”, chosen in Send choices to, is no longer one of Orca's bots, so nothing is sent: a choice copies your answer and opens the chat."))
+  for (const t of html.match(/<button type="button" class="scelta[^>]*>/g) ?? []) assert.ok(t.includes('data-apri='), t)
+  // Garbage in the storage counts as nobody.
+  for (const male of [{ id: 'Atlas', nome: 'Atlas' }, 'Atlas', 7, { nome: 'x' }]) {
+    const g = finte()
+    const m = await monta(g, {}, { 'scelte.bot': male })
+    assert.equal((await m.worker.request('regia.aggiorna')).invioScelte, null, JSON.stringify(male))
+    await attivo?.deactivate()
+    attivo = undefined
+  }
+})
+
+test('choices: a question that changed in Orca, or a request that is not well formed, sends nothing', async () => {
+  const f = finte()
+  const { worker } = await monta(f, {}, scelto(BOTS.atlas))
+  await worker.request('regia.aggiorna')
+  for (const chiesta of [{ ...DODICI, evento: 'ev-old' }, { ...DODICI, o: 5 }, { ...DODICI, item: `${ATLAS}:demo-404` }]) assert.equal((await worker.request('regia.scelta', chiesta)).stato, 'cambiata', JSON.stringify(chiesta))
+  for (const chiesta of [null, 'x', { ...DODICI, item: '--to' }, { ...DODICI, q: '0' }, { ...DODICI, o: 1.5 }]) assert.equal((await worker.request('regia.scelta', chiesta as any)).stato, 'errore', JSON.stringify(chiesta))
+  assert.equal(f.invii.length, 0)
 })

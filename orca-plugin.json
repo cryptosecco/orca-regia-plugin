@@ -2,8 +2,8 @@
   "manifestVersion": 2,
   "id": "regia",
   "name": "Regia",
-  "version": "0.8.4",
-  "description": "A read-only control room for your Orca bots: what is waiting on you, the queue by priority, who is working on what, and how work flows between bots, workers and pull requests.",
+  "version": "0.8.5",
+  "description": "A control room for your Orca bots: what is waiting on you, the queue by priority, who is working on what, and how work flows between bots, workers and pull requests. Read-only, unless you pick a bot in the Queue's Send choices to menu: then a click on an option of a question sends your choice to that bot.",
   "author": {
     "name": "cryptosecco"
   },

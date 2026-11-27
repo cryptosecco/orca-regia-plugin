@@ -26,14 +26,46 @@ export type Scheda = {
   agenti: AgenteScheda[]
 }
 
+/** Una domanda di un item con le sue risposte rapide, come le scrive il bot (`--ask`, `--option`, `--recommended`, `--multi`). */
+export type Quesito = {
+  chiede: string
+  /** Le risposte rapide, nell'ordine del bot: l'etichetta e la nota che la accompagna (vuota se non c'è). */
+  opzioni: { etichetta: string; dettaglio: string }[]
+  /** L'indice dell'opzione consigliata. Null: nessuna. */
+  consigliata: number | null
+  /** Se ne può scegliere più d'una. */
+  multi: boolean
+}
+
+/** Una scelta mandata con un clic al bot scelto nel menu «Send choices to»: quale opzione, e quando. */
+export type SceltaInviata = { o: number; quando: number }
+
+/** Cosa chiede il pannello al worker quando si preme un'opzione: solo la voce, l'evento della domanda e due numeri. */
+export type RichiestaScelta = { item: string; evento: string; q: number; o: number }
+
+/**
+ * Com'è andata: `inviata` (anche quando era già partita prima: allora `gia`), `cambiata` (la domanda non è
+ * più quella, o l'item non aspetta più una risposta: niente è partito), `spento` (nel menu «Send choices
+ * to» non c'è un bot: niente parte, il pannello copia e apre la chat), `errore` (niente è partito, o
+ * non si sa: `motivo` lo dice).
+ */
+/** Il bot scelto nel menu «Send choices to», com'è salvato nello storage del plugin: il suo id, e il nome per dirlo se sparisce. */
+export type BotScelte = { id: string; nome: string }
+
+export type EsitoScelta =
+  | { stato: 'inviata'; o: number; quando: number; gia?: boolean }
+  | { stato: 'cambiata'; motivo: string }
+  | { stato: 'spento' }
+  | { stato: 'errore'; motivo: string }
+
 export type Domanda = {
+  /** L'evento della domanda: una domanda nuova è un evento nuovo. */
   evento: string
   contesto: string
+  /** La prima domanda, in una riga (per avvisi e schede). Vuota: c'è solo il contesto. */
   chiede: string
-  opzioni: string[]
-  consigliata: number | null
-  /** Quante altre domande ci sono oltre alla prima. */
-  altre: number
+  /** Tutte le domande, ognuna con le sue opzioni: al massimo 5, con al massimo 8 opzioni ciascuna, come in Orca. */
+  domande: Quesito[]
 }
 
 export type Bot = {
@@ -289,6 +321,19 @@ export type Quadro = {
    * c'è (un'altra macchina, la versione per lo store): lì il pannello non mostra niente che la riguardi.
    */
   sandbox?: { prove: Prova[] }
+  /**
+   * Le scelte già mandate dalla coda al bot scelto nel menu «Send choices to» e che valgono ancora (la voce
+   * aspetta ancora una risposta, con la stessa domanda), per `chiaveScelta`: il pannello le mostra come
+   * inviate e non le rimanda.
+   */
+  scelte?: Record<string, SceltaInviata>
+  /**
+   * Dove va una scelta premuta nella coda: il bot scelto nel menu «Send choices to» della Queue (salvato
+   * nello storage del plugin). `bot` e `id`: c'è, e il clic gli manda la scelta. `manca`: il bot scelto non
+   * è più tra i bot di Orca (il suo nome com'era). Null (nessun bot scelto, il default): il clic non manda
+   * niente, copia la risposta e apre la chat.
+   */
+  invioScelte?: { bot: string; id: string } | { manca: string } | null
   fonti: Fonti
   conteggi: { agenti: number; lavoro: number; aspettano: number; errori: number; incroci: number }
   /** Tutto quello che aspetta una risposta, anche fuori dalla coda: serve agli avvisi. */

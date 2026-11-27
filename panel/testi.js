@@ -20,7 +20,6 @@ export const T = {
     taskIs: ['task is', 'tasks are'],
     moreAgent: ['more agent', 'more agents'],
     moreWorker: ['more worker', 'more workers'],
-    moreQuestion: ['more question', 'more questions'],
     overlap: ['overlap', 'overlaps'],
     handoff: ['handoff', 'handoffs'],
     message: ['message', 'messages'],
@@ -256,7 +255,6 @@ export const T = {
     noPriority: 'no priority in the title: counts as whenever',
     noQuestion: 'No written question: the details are in the chat.',
     recommended: 'recommended',
-    andMoreQuestions: (x) => `and ${x}`,
     answerIn: (nome) => `answer in ${nome}'s chat`,
     goCard: (nome) => `go to ${nome}'s card`,
     open: (da) => `open ${da}`,
@@ -274,7 +272,32 @@ export const T = {
     labelBot: 'Bot',
     labelProject: 'Project',
     theBot: 'the bot',
-    readOnly: (chi) => `Read-only here: a click opens ${chi}'s chat, where you answer.`,
+    // The buttons of a question's options. `bot` is the bot that receives choices (the «Send choices to» menu);
+    // `chi` is the bot whose chat a click opens when nothing is sent.
+    sendsTo: (bot) => `Sends your choice to ${bot}.`,
+    sentTo: (bot) => `Sent to ${bot}.`,
+    copiesAndOpens: (chi) => `Nothing is sent from here: copies your answer and opens ${chi}'s chat.`,
+    pickMany: 'You can pick more than one.',
+    pickManyEach: (bot) => `You can pick more than one: each one goes to ${bot} on its own.`,
+    sending: (scelta, bot) => `Sending ${scelta} to ${bot}…`,
+    sent: (bot, ora, scelta) => `✓ Sent to ${bot}${ora ? ` at ${ora}` : ''}: ${scelta}. The card stays until the item is updated.`,
+    changed: 'This question has changed: nothing was sent.',
+    notSent: (motivo, chi) => `Not sent: ${motivo} You can try again, or answer in ${chi}'s chat.`,
+    notConfirmed: (motivo) => `Not confirmed: ${motivo}`,
+    unknownError: 'unknown error.',
+    answerThere: (scelta, chi) => `Not sent from here: answer ${scelta} in ${chi}'s chat.`,
+    copied: ' Copied, ready to paste.',
+    // The line under «Decide now»: what a click on an option does.
+    readOnly: (chi) => `Nothing is sent from here: a choice copies your answer and opens ${chi}'s chat, where you answer.`,
+    choicesGo: (bot) => `A choice goes to ${bot} as your answer, to record on the item. Nothing is sent without your click.`,
+    choicesBotMissing: (nome) => `“${nome}”, chosen in Send choices to, is no longer one of Orca's bots, so nothing is sent: a choice copies your answer and opens the chat.`,
+    // The menu under «Decide now» that picks the bot a click sends choices to. Picking one sends nothing.
+    sendChoicesTo: 'Send choices to',
+    nobody: 'nobody: copy and open the chat',
+    menuHint: 'Which bot receives your choice when you click an option. Changing it sends nothing.',
+    menuFailed: (motivo) => `The bot for your choices did not change: ${motivo}`,
+    // What is copied when nothing is sent: the item's number, then the answer as Orca's quick reply writes it.
+    answerText: (numero, domanda, scelta) => `Item ${numero}: ${domanda ? `${domanda} → ` : ''}${scelta}`,
     otherWait: (n) => ` The other ${n} wait in their lanes.`,
     nothingToDecideToday: 'Nothing to decide today',
     whenChoice: (dove) => `When a choice needs you, ${dove}.`,
@@ -492,6 +515,9 @@ export const T = {
     errorWord: 'error',
     workerDownStale: 'The worker is not answering: what you see is the last data read.',
     openChatFallback: 'Cannot open the chat in Orca: taking you to its card.',
-    cannotOpen: 'Cannot open it in Orca.'
+    cannotOpen: 'Cannot open it in Orca.',
+    questionChanged: 'This question has just changed: nothing was sent. Look at the card again.',
+    workerSlow: 'the worker took too long. Check the chat before trying again: the choice may have reached it.',
+    workerNoAnswer: (codice) => `the worker did not answer (${codice}).`
   }
 }

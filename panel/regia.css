@@ -367,10 +367,13 @@ h2 small.num { margin-left: auto; color: var(--testo); font-weight: 600; font-si
 .vcoda { display: grid; gap: 26px; min-width: 0; }
 .vcoda section { min-width: 0; }
 .vc-decidi:focus { outline: none; }
-/* Decide now: un elenco solo, in un riquadro, con una riga tra una decisione e l'altra. Ogni decisione è un tasto. */
+/* Decide now: un elenco solo, in un riquadro, con una riga tra una decisione e l'altra. La testa di ogni
+   decisione è un tasto che apre la chat; sotto, le domande coi tasti delle opzioni; in fondo il link. */
 .decidi { border: 1px solid var(--riga); background: var(--carta); }
+.dec { display: grid; min-width: 0; }
 .dec + .dec { border-top: 1px solid var(--riga2); }
-.dec-tasto { width: 100%; display: grid; gap: 6px; padding: 12px 12px 10px; min-width: 0; }
+.dec-tasto { width: 100%; display: grid; gap: 6px; padding: 12px 12px 6px; min-width: 0; }
+.dec-domande { padding: 0 12px; min-width: 0; }
 .dec-tasto:hover { background: var(--pan2); }
 .dec-tasto:active { background: var(--riga2); }
 .dec-tasto:focus-visible { outline-offset: -2px; }
@@ -382,13 +385,42 @@ h2 small.num { margin-left: auto; color: var(--testo); font-weight: 600; font-si
 .dec .chiede, .dec .contesto { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .chiede.muto { color: var(--tenue); }
 .dec .chiede:not(.muto) { color: var(--testo); }
-.opz { display: grid; gap: 2px; font-size: 11.5px; }
-.op { display: flex; gap: 8px; align-items: baseline; color: var(--testo); min-width: 0; overflow-wrap: anywhere; }
-.op .lettera { color: var(--tenue); font-weight: 700; flex: none; }
-.op.si .lettera { color: var(--ambra); }
-.dec-piede { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 11px; margin-top: 2px; }
+/* Le opzioni di una domanda sono tasti veri, uno per riga: lettera, etichetta (con la sua nota sotto) e,
+   per la consigliata, bordo e lettera ambra col cartellino «recommended». Più domande: un gruppo ciascuna.
+   Il tasto premuto resta segnato in menta, con sotto cosa è successo. */
+.quesiti { display: grid; gap: 12px; min-width: 0; justify-self: stretch; }
+.quesito { display: grid; gap: 6px; min-width: 0; }
+.quesito .chiede .num { color: var(--tenue); }
+.scelte { display: grid; gap: 4px; min-width: 0; }
+.scelta { display: flex; gap: 8px; align-items: baseline; width: 100%; min-width: 0; padding: 6px 9px; border: 1px solid var(--riga); background: var(--pan); color: var(--testo); font-size: 11.5px; line-height: 1.35; text-align: left; overflow-wrap: anywhere; }
+.scelta:hover { border-color: var(--menta2); background: var(--pan2); }
+.scelta:active { background: var(--riga2); }
+.scelta:focus-visible { outline-offset: 1px; }
+.scelta .lettera { color: var(--tenue); font-weight: 700; flex: none; }
+.scelta .op-testo { flex: 1; min-width: 0; }
+.scelta .spiega { display: block; margin-top: 2px; color: var(--tenue); font-size: 10.5px; }
+.scelta.si { border-color: var(--ambra); }
+.scelta.si .lettera { color: var(--ambra); }
+/* Dopo il clic: il tasto premuto resta segnato (blu mentre parte, verde quando è partito, rosso se non è
+   partito); gli altri della stessa domanda si spengono finché la scelta parte o è partita. */
+.scelta.premuta { --sc: var(--menta); border-color: var(--sc); box-shadow: inset 3px 0 0 var(--sc); }
+.scelta.premuta.invio { --sc: var(--blu); }
+.scelta.premuta.inviata { --sc: var(--verde); }
+.scelta.premuta.errore { --sc: var(--rosso); }
+.scelta.premuta .lettera { color: var(--sc); }
+.scelta[disabled] { cursor: default; }
+.scelta[disabled]:not(.premuta) { opacity: 0.45; }
+.scelta[disabled]:hover { border-color: var(--riga); background: var(--pan); }
+.scelta.premuta[disabled]:hover { border-color: var(--sc); }
+.scelta .spunta { color: var(--verde); font-weight: 700; margin-left: auto; flex: none; }
+.nota-multi { font-size: 10.5px; }
+.dopo-scelta { font-size: 11px; color: var(--c); overflow-wrap: anywhere; }
+/* Il menu «Send choices to» sotto «Decide now»: come il filtro dei progetti; acceso (menta) quando c'è un bot. */
+.invio-scelte { margin-top: 10px; font-size: 11px; min-width: 0; }
+.invio-scelte .scegli { max-width: 100%; }
+.dec-piede { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 11px; padding: 8px 12px 10px; }
 .dec-piede .va { margin-left: auto; color: var(--menta2); }
-.dec-tasto:hover .va { color: var(--menta); }
+.dec-piede .va:hover { color: var(--menta); }
 .sola-lettura { margin-top: 8px; font-size: 11px; }
 
 /* I tre contatori: numeri grandi, senza cornici in più. Si premono, e filtrano le corsie. */
@@ -726,14 +758,17 @@ main { padding-top: 18px; }
 .decidi { display: grid; gap: 10px; border: 0; background: none; }
 .dec, .dec + .dec { border: 1px solid var(--riga2); background: var(--carta); }
 .dec.p0 { border-left: 3px solid var(--p0); } .dec.p1 { border-left: 3px solid var(--p1); }
-.dec-tasto { padding: 14px 14px 12px; gap: 7px; }
+.dec-tasto { padding: 14px 14px 8px; gap: 7px; }
+.dec-domande { padding: 0 14px; }
+.dec-piede { padding: 10px 14px 12px; }
 .dec-cosa { font-size: 15px; order: -1; }
 .dec-testa { order: 0; }
 .dec-testa .prog { font-size: 10.5px; color: var(--tenue); }
 .dec-testa .pal { display: none; }
-/* «answer in <bot>'s chat ›» si dice una volta, sotto l'elenco; sulla carta compare al passaggio. */
-.dec-piede .va { visibility: hidden; }
-.dec-tasto:hover .va, .dec-tasto:focus-visible .va { visibility: visible; }
+/* «answer in <bot>'s chat ›»: su una carta coi tasti compare al passaggio o col fuoco dentro la carta; su
+   una carta senza opzioni è l'unica strada, e resta sempre. */
+.dec.con-tasti .dec-piede .va { visibility: hidden; }
+.dec.con-tasti:hover .dec-piede .va, .dec.con-tasti:focus-within .dec-piede .va { visibility: visible; }
 .dec-piede .muto { color: var(--tenue); }
 .sola-lettura { margin-top: 12px; color: var(--tenue); }
 /* I tre contatori: il numero è il titolo, l'etichetta la nota. */
