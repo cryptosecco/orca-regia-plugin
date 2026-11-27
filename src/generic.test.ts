@@ -303,13 +303,46 @@ test('a `bot list` that hangs does not take the panel down: this computer\'s bot
   const due = await leggiCliAGiri(f.dip, '', mem, { quanti: 1 })
   assert.equal(log.filter((l) => l.comando === 'bot list').length, antes)
   assert.deepEqual(due.parziale, { motivo: 'timeout', secondi: 3 })
-  // A minute later the full list is tried again; it answers, and the notice is gone.
+  // A minute later the full list is asked for again IN THE BACKGROUND: the round does not wait for it (it would cost the deadline).
   ora += RIPROVA_BOT_MS
   stato.lenta = false
   const tre = await leggiCliAGiri(f.dip, '', mem, { quanti: 1 })
   assert.equal(log.filter((l) => l.comando === 'bot list').length, antes + 1)
-  assert.equal(tre.parziale, undefined)
+  assert.deepEqual(tre.parziale, { motivo: 'timeout', secondi: 3 })
+  // It answered: the next round has the full list and no notice.
+  await mem.sonda
+  ora += 4000
+  const quattro = await leggiCliAGiri(f.dip, '', mem, { quanti: 1 })
+  assert.equal(quattro.parziale, undefined)
   assert.equal(mem.lista, null)
+  assert.equal(log.filter((l) => l.comando === 'bot list').length, antes + 1)
+  // A background try that is killed again keeps the notice and waits another minute.
+  stato.lenta = true
+  const otra = conListaCheNonRisponde(botsLocali())
+  const m2 = memoriaCli()
+  let ora2 = NOW
+  otra.f.dip.adesso = () => ora2
+  await leggiCliAGiri(otra.f.dip, '', m2, { tutto: true })
+  ora2 += RIPROVA_BOT_MS
+  await leggiCliAGiri(otra.f.dip, '', m2, { quanti: 1 })
+  await m2.sonda
+  assert.equal(m2.piena, null)
+  assert.equal(m2.lista?.quando, ora2)
+})
+
+test('the retry of a hung bot list never holds a round: the round returns while the retry is still pending', async () => {
+  const { f } = conListaCheNonRisponde(botsLocali())
+  const mem = memoriaCli()
+  let ora = NOW
+  f.dip.adesso = () => ora
+  await leggiCliAGiri(f.dip, '', mem, { tutto: true })
+  const real = f.dip.lancia
+  // From now on bot list hangs for good (never answers); the rest answers.
+  f.dip.lancia = (e, a, s) => (a.includes('list') && a[0] === 'bot' && a.length <= 3 ? new Promise<string>(() => {}) : real(e, a, s))
+  ora += RIPROVA_BOT_MS
+  const ronda = await Promise.race([leggiCliAGiri(f.dip, '', mem, { quanti: 1 }), new Promise<string>((r) => setTimeout(() => r('held'), 1500))])
+  assert.notEqual(ronda, 'held')
+  assert.ok(mem.sonda, 'the retry is running in the background')
 })
 
 test('a `bot list` killed by its deadline is not tried again with the next executable', async () => {

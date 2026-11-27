@@ -310,8 +310,17 @@ async function comando(dip: Dipendenze, eseguibili: string[], nome: NomeComando,
 }
 
 /** Quello che si ricorda della CLI tra un giro e l'altro: l'eseguibile buono, gli ultimi dati, a che punto è la rotazione. */
-export type MemoriaCli = { buono: string | null; grezza: CliGrezza | null; turno: number; lista: { quando: number; parziale: NonNullable<CliGrezza['parziale']> } | null }
-export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno: 0, lista: null })
+export type MemoriaCli = {
+  buono: string | null
+  grezza: CliGrezza | null
+  turno: number
+  /** `bot list` non ha risposto: da quando si prova a richiederlo (in sottofondo), e cosa dire. */
+  lista: { quando: number; parziale: NonNullable<CliGrezza['parziale']> } | null
+  /** La richiesta di `bot list` in sottofondo, e la lista intera quando arriva: il giro dopo la usa. */
+  sonda: Promise<void> | null
+  piena: any[] | null
+}
+export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno: 0, lista: null, sonda: null, piena: null })
 
 /**
  * Un giro sulla CLI, un comando dopo l'altro (mai in parallelo), a priorità:
@@ -331,10 +340,18 @@ export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: 
   let buono = ''
   const scadenza = opzioni.scadenzaBotMs ?? SCADENZA_PREDEFINITA_MS
   const adesso = dip.adesso()
-  // Dopo un `bot list` che non ha risposto non lo si richiede per un po': ogni giro pagherebbe la scadenza intera.
-  let parziale: CliGrezza['parziale'] | undefined = mem.lista && adesso - mem.lista.quando < RIPROVA_BOT_MS ? mem.lista.parziale : undefined
+  // Dopo un `bot list` che non ha risposto non si aspetta più: ogni giro pagherebbe la scadenza intera. Lo si richiede in sottofondo (vedi sotto).
+  let parziale: CliGrezza['parziale'] | undefined = mem.lista?.parziale
   let fermato = ''
-  if (!parziale) {
+  if (mem.piena) {
+    // La richiesta in sottofondo ha avuto risposta: la lista intera, senza avviso.
+    bots = mem.piena
+    mem.piena = null
+    mem.lista = null
+    parziale = undefined
+    buono = mem.buono && eseguibili.includes(mem.buono) ? mem.buono : eseguibili[0]
+    errore = null
+  } else if (!parziale) {
     for (const e of eseguibili) {
       try {
         // Un bot una volta sola, per id: un server collegato che è lo stesso Orca ridà gli stessi bot.
@@ -374,7 +391,19 @@ export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: 
     throw errore
   }
   mem.buono = buono
-  if (parziale) mem.lista = { quando: mem.lista?.parziale === parziale ? mem.lista.quando : adesso, parziale }
+  if (parziale && !mem.lista) mem.lista = { quando: adesso, parziale }
+  // Passato un minuto si riprova `bot list` senza aspettarlo: il giro non si ferma, e se risponde lo si usa dal giro dopo.
+  if (mem.lista && !mem.sonda && adesso - mem.lista.quando >= RIPROVA_BOT_MS) {
+    mem.lista.quando = adesso
+    mem.sonda = comando(dip, [buono], 'bot', undefined, scadenza)
+      .then((r) => {
+        mem.piena = botUnici(r?.bots ?? [])
+      })
+      .catch(() => {})
+      .finally(() => {
+        mem.sonda = null
+      })
+  }
 
   const prova = async (nome: NomeComando, bot?: string) => {
     try {
