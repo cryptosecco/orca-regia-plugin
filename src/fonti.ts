@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process'
 import { watch } from 'node:fs'
 import { lstat, open, readdir, readFile, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
+import { win32 } from 'node:path'
 import { avatarDi, botUnici, oggettoScelta, type CliGrezza, type FotoBot, type FotoSua, type StatoLetto } from './norma'
 
 /** Gli unici comandi che il plugin lancia. `{bot}` è l'id di un bot preso da `bot list`: il nome può cambiare e portare un'emoji, l'id no. */
@@ -77,13 +78,18 @@ const MASSIMO_PROVE = 40
 const NOME_STATO = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}\.json$/
 const NOME_REGISTRO = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.log$/
 
+/** Quanto aspetta la CLI, di norma: `bot list` ha la sua scadenza nelle impostazioni. */
+export const SCADENZA_PREDEFINITA_MS = 10_000
+/** Dopo che `bot list` non ha risposto, per quanto non lo si richiede: ogni giro costerebbe la scadenza intera. */
+export const RIPROVA_BOT_MS = 60_000
+
 export type Dipendenze = {
   casa: string
   /** Quel processo c'è ancora? Serve a scartare il file di stato rimasto dopo un `kill -9`. Non manda segnali. */
   vivo: (pid: number) => boolean
   adesso: () => number
   /** Lancia `orca <argomenti> --json` e restituisce il testo stampato. */
-  lancia: (eseguibile: string, argomenti: string[]) => Promise<string>
+  lancia: (eseguibile: string, argomenti: string[], scadenzaMs?: number) => Promise<string>
   /** Come `lancia`, ma scrive `ingresso` sullo standard input del comando. Solo per `scelta` e `sceltaChat`. */
   lanciaCon: (eseguibile: string, argomenti: string[], ingresso: string) => Promise<string>
   leggiFile: (percorso: string) => Promise<string>
@@ -103,6 +109,44 @@ export type Dipendenze = {
   osserva: (cartella: string, cambia: (nome: string | null) => void, guasto: () => void) => { chiudi: () => void }
 }
 
+/**
+ * L'ambiente per la CLI. Orca avvia il worker con un ambiente ridotto, e su Windows in quell'ambiente
+ * non ci sono APPDATA né LOCALAPPDATA: la CLI senza APPDATA non trova il runtime di Orca, e risponde
+ * `runtime_unavailable` a ogni comando. Qui si rimmettono, se mancano; tutto il resto resta com'è.
+ */
+export function envPerLaCli(
+  ambiente: Record<string, string | undefined> = process.env,
+  casa = homedir(),
+  sistema = process.platform
+): Record<string, string | undefined> {
+  const env = { ...ambiente }
+  if (sistema === 'win32') {
+    env.APPDATA ??= win32.join(casa, 'AppData', 'Roaming')
+    env.LOCALAPPDATA ??= win32.join(casa, 'AppData', 'Local')
+  }
+  return env
+}
+
+/**
+ * La CLI di Orca su Windows, se si trova. Serve il percorso intero: lanciata con un nome solo
+ * (`orca`), la CLI cerca il suo comando nella cartella in cui si trova, e il worker gira dentro la
+ * cartella dell'app: da lì il comando non c'è, e ogni chiamata muore con `MODULE_NOT_FOUND`.
+ */
+export function cliDiWindows(
+  sistema = process.platform,
+  risorse = (process as { resourcesPath?: string }).resourcesPath,
+  eseguibile = process.execPath,
+  casa = homedir()
+): string[] {
+  if (sistema !== 'win32') return []
+  const basi = [
+    risorse,
+    eseguibile ? win32.join(win32.dirname(eseguibile), 'resources') : '',
+    win32.join(casa, 'AppData', 'Local', 'Programs', 'orca', 'resources')
+  ]
+  return [...new Set(basi.filter((b): b is string => Boolean(b)).map((b) => win32.join(b, 'bin', 'orca.exe')))]
+}
+
 export function dipendenzeVere(): Dipendenze {
   return {
     casa: homedir(),
@@ -117,15 +161,15 @@ export function dipendenzeVere(): Dipendenze {
       }
     },
     adesso: () => Date.now(),
-    lancia: (eseguibile, argomenti) =>
+    lancia: (eseguibile, argomenti, scadenzaMs = SCADENZA_PREDEFINITA_MS) =>
       new Promise((ok, no) => {
-        execFile(eseguibile, argomenti, { timeout: 10_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (errore, stdout) =>
+        execFile(eseguibile, argomenti, { env: envPerLaCli(), timeout: scadenzaMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true }, (errore, stdout) =>
           errore ? no(errore) : ok(String(stdout))
         )
       }),
     lanciaCon: (eseguibile, argomenti, ingresso) =>
       new Promise((ok, no) => {
-        const figlio = execFile(eseguibile, argomenti, { timeout: 20_000, maxBuffer: 1024 * 1024, windowsHide: true }, (errore, stdout) =>
+        const figlio = execFile(eseguibile, argomenti, { env: envPerLaCli(), timeout: 20_000, maxBuffer: 1024 * 1024, windowsHide: true }, (errore, stdout) =>
           // Un errore del comando stampa comunque la sua risposta JSON: chi chiama la legge per dire il motivo.
           errore && !String(stdout).trim() ? no(errore) : ok(String(stdout))
         )
@@ -197,9 +241,14 @@ export function argomentiCon(comando: 'item1' | 'scelta' | 'sceltaChat', valori:
   return [...modello.map((a) => (a === '{item}' ? item : a === 'bot:{bot}' ? `bot:${valori.bot}` : a === '{oggetto}' ? String(valori.oggetto) : a)), '--json']
 }
 
+/** Gli eseguibili della CLI da provare, in ordine: le impostazioni, poi la CLI dell'app (macOS, Windows), poi il PATH. */
+function eseguibiliDa(dip: Dipendenze, percorsoOrca: string): string[] {
+  return [...new Set([percorsoOrca.trim() && espandi(percorsoOrca.trim(), dip.casa), ORCA_APP, ...cliDiWindows(), 'orca'].filter(Boolean))] as string[]
+}
+
 /** L'eseguibile della CLI per un comando fuori dai giri: quello che ha appena risposto ai giri in lettura, o il primo dell'elenco. */
 export function eseguibileBuono(dip: Dipendenze, percorsoOrca: string, mem: MemoriaCli): string {
-  const tutti = [...new Set([percorsoOrca.trim() && espandi(percorsoOrca.trim(), dip.casa), ORCA_APP, 'orca'].filter(Boolean))] as string[]
+  const tutti = eseguibiliDa(dip, percorsoOrca)
   return mem.buono && tutti.includes(mem.buono) ? mem.buono : tutti[0]
 }
 
@@ -242,12 +291,12 @@ export const espandi = (percorso: string, casa: string): string =>
   percorso === '~' ? casa : percorso.startsWith('~/') ? casa + percorso.slice(1) : percorso
 
 /** Un comando, con il primo eseguibile che risponde. Restituisce `result`. */
-async function comando(dip: Dipendenze, eseguibili: string[], nome: NomeComando, bot?: string): Promise<any> {
+async function comando(dip: Dipendenze, eseguibili: string[], nome: NomeComando, bot?: string, scadenzaMs?: number): Promise<any> {
   const argomenti = argomentiDi(nome, bot)
   let ultimo: unknown = new Error('no orca executable found')
   for (const eseguibile of eseguibili) {
     try {
-      const dati = JSON.parse(await dip.lancia(eseguibile, argomenti))
+      const dati = JSON.parse(await dip.lancia(eseguibile, argomenti, scadenzaMs))
       if (!dati?.ok) throw new Error(String(dati?.error?.message ?? dati?.error?.code ?? 'response not ok'))
       return dati.result
     } catch (errore) {
@@ -258,8 +307,19 @@ async function comando(dip: Dipendenze, eseguibili: string[], nome: NomeComando,
 }
 
 /** Quello che si ricorda della CLI tra un giro e l'altro: l'eseguibile buono, gli ultimi dati, a che punto è la rotazione. */
-export type MemoriaCli = { buono: string | null; grezza: CliGrezza | null; turno: number }
-export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno: 0 })
+export type MemoriaCli = {
+  buono: string | null
+  grezza: CliGrezza | null
+  turno: number
+  /** `bot list` non ha risposto: da quando si prova a richiederlo (in sottofondo), e cosa dire. */
+  lista: { quando: number; parziale: NonNullable<CliGrezza['parziale']> } | null
+  /** La richiesta di `bot list` in sottofondo, e la lista intera quando arriva: il giro dopo la usa. */
+  sonda: Promise<void> | null
+  piena: any[] | null
+  /** Comandi per bot fermati dalla scadenza (`bot work list` chiede anche ai server collegati): quando, per nome. Per un minuto non si richiedono. */
+  lenti: Partial<Record<NomeComando, number>>
+}
+export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno: 0, lista: null, sonda: null, piena: null, lenti: {} })
 
 /**
  * Un giro sulla CLI, un comando dopo l'altro (mai in parallelo), a priorità:
@@ -270,34 +330,97 @@ export const memoriaCli = (): MemoriaCli => ({ buono: null, grezza: null, turno:
  * Se `bot list` non risponde il giro fallisce e la memoria resta com'era; un altro comando che manca
  * lascia il dato di prima.
  */
-export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: MemoriaCli, opzioni: { tutto?: boolean; prioritario?: string; tuttiGliItem?: boolean; quanti?: number } = {}): Promise<CliGrezza> {
-  const tutti = [...new Set([percorsoOrca.trim() && espandi(percorsoOrca.trim(), dip.casa), ORCA_APP, 'orca'].filter(Boolean))] as string[]
+export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: MemoriaCli, opzioni: { tutto?: boolean; prioritario?: string; tuttiGliItem?: boolean; quanti?: number; scadenzaBotMs?: number } = {}): Promise<CliGrezza> {
+  const tutti = eseguibiliDa(dip, percorsoOrca)
   // Il primo comando sceglie l'eseguibile buono: gli altri non riprovano quelli che mancano.
   const eseguibili = mem.buono && tutti.includes(mem.buono) ? [mem.buono, ...tutti.filter((e) => e !== mem.buono)] : tutti
   let bots: any[] = []
   let errore: unknown = new Error('no orca executable found')
   let buono = ''
-  for (const e of eseguibili) {
+  const scadenza = opzioni.scadenzaBotMs ?? SCADENZA_PREDEFINITA_MS
+  const adesso = dip.adesso()
+  // Dopo un `bot list` che non ha risposto non si aspetta più: ogni giro pagherebbe la scadenza intera. Lo si richiede in sottofondo (vedi sotto).
+  let parziale: CliGrezza['parziale'] | undefined = mem.lista?.parziale
+  let fermato = ''
+  if (mem.piena) {
+    // La richiesta in sottofondo ha avuto risposta: la lista intera, senza avviso.
+    bots = mem.piena
+    mem.piena = null
+    mem.lista = null
+    parziale = undefined
+    buono = mem.buono && eseguibili.includes(mem.buono) ? mem.buono : eseguibili[0]
+    errore = null
+  } else if (!parziale) {
+    for (const e of eseguibili) {
+      try {
+        // Un bot una volta sola, per id: un server collegato che è lo stesso Orca ridà gli stessi bot.
+        bots = botUnici((await comando(dip, [e], 'bot', undefined, scadenza))?.bots ?? [])
+        buono = e
+        errore = null
+        mem.lista = null
+        break
+      } catch (x) {
+        errore = x
+        // Fermato dalla scadenza: l'eseguibile c'è e non risponde, un altro non risponderebbe meglio.
+        if ((x as { killed?: boolean; signal?: string | null })?.killed || (x as { signal?: string | null })?.signal) {
+          fermato = e
+          break
+        }
+      }
+    }
+    if (errore) parziale = { motivo: fermato ? 'timeout' : 'error', secondi: Math.round(scadenza / 1000) }
+  }
+  if (errore && parziale) {
+    // `bot list` non c'è: i bot di questo computer dalle loro case, senza la CLI. Ogni comando che chiede anche ai
+    // server collegati (`bot list`, `worktree ps --since`) si ferma dove si ferma lui: nessuno è un ripiego.
     try {
-      // Un bot una volta sola, per id: un server collegato che è lo stesso Orca ridà gli stessi bot.
-      bots = botUnici((await comando(dip, [e], 'bot'))?.bots ?? [])
-      buono = e
-      errore = null
-      break
-    } catch (x) {
-      errore = x
+      bots = botUnici(await leggiRoster(dip))
+      if (!bots.length) throw new Error('no bot homes')
+      // Un eseguibile per il resto del giro: quello fermato dalla scadenza c'è; sennò il primo che risponde alle schede (locali).
+      buono = fermato
+      for (const e of fermato ? [] : eseguibili) {
+        try {
+          await comando(dip, [e], 'schede')
+          buono = e
+          break
+        } catch {
+          // Non c'è: il prossimo.
+        }
+      }
+      if (buono) errore = null
+    } catch {
+      // Nessuna casa: vale l'errore di `bot list`.
     }
   }
   if (errore) {
     mem.buono = null
+    // Anche senza ripiego non si aspetta `bot list` a ogni giro.
+    if (parziale && !mem.lista) mem.lista = { quando: adesso, parziale }
     throw errore
   }
   mem.buono = buono
+  if (parziale && !mem.lista) mem.lista = { quando: adesso, parziale }
+  // Passato un minuto si riprova `bot list` senza aspettarlo: il giro non si ferma, e se risponde lo si usa dal giro dopo.
+  if (mem.lista && !mem.sonda && adesso - mem.lista.quando >= RIPROVA_BOT_MS) {
+    mem.lista.quando = adesso
+    mem.sonda = comando(dip, [buono], 'bot', undefined, scadenza)
+      .then((r) => {
+        mem.piena = botUnici(r?.bots ?? [])
+      })
+      .catch(() => {})
+      .finally(() => {
+        mem.sonda = null
+      })
+  }
 
   const prova = async (nome: NomeComando, bot?: string) => {
+    // Fermato un minuto fa dalla scadenza: costerebbe la scadenza intera per ogni bot. Restano gli ultimi dati.
+    const lento = mem.lenti[nome]
+    if (lento !== undefined && dip.adesso() - lento < RIPROVA_BOT_MS) return null
     try {
       return await comando(dip, [buono], nome, bot)
-    } catch {
+    } catch (x) {
+      if ((x as { killed?: boolean })?.killed || (x as { signal?: string | null })?.signal) mem.lenti[nome] = dip.adesso()
       return null
     }
   }
@@ -307,7 +430,7 @@ export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: 
   const ids = bots.map((b) => String(b?.id ?? '')).filter((id) => ID_BOT.test(id))
   const perBot: CliGrezza['perBot'] = {}
   for (const id of ids) if (prima?.perBot[id]) perBot[id] = { ...prima.perBot[id] }
-  const grezza: CliGrezza = { bots, perBot, schede: prima?.schede ?? [], automazioni: prima?.automazioni ?? [], posta: prima?.posta ?? [], operai: prima?.operai ?? [] }
+  const grezza: CliGrezza = { bots, perBot, schede: prima?.schede ?? [], automazioni: prima?.automazioni ?? [], posta: prima?.posta ?? [], operai: prima?.operai ?? [], ...(parziale ? { parziale } : {}) }
   type Passo = () => Promise<void>
   const diBot = (id: string, cosa: 'item' | 'lavori' | 'chat'): Passo => async () => {
     const r = await prova(cosa, id)
@@ -345,6 +468,24 @@ export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: 
   await operai()
   mem.grezza = grezza
   return grezza
+}
+
+/**
+ * I bot di questo computer dalle loro case, `~/.orca/bots/<casa>/bot.json`: id, nome e agente, come li chiede `bot list`
+ * ma senza `paused` e senza la specialità (non stanno nel file). Solo case con un id valido: una chat di gruppo non è un bot.
+ */
+export async function leggiRoster(dip: Dipendenze, cartella = CASE_BOT): Promise<any[]> {
+  const radice = espandi(cartella, dip.casa)
+  const bots: any[] = []
+  for (const casa of (await dip.elenca(radice)).filter((n) => NOME_CASA.test(n)).sort().slice(0, 60)) {
+    try {
+      const b = JSON.parse(await dip.leggiFile(`${radice}/${casa}/bot.json`))
+      if (b && typeof b.name === 'string' && ID_BOT.test(String(b.id))) bots.push({ id: String(b.id), name: b.name, agent: typeof b.agent === 'string' ? b.agent : '', paused: false, specialty: '' })
+    } catch {
+      // Non è la casa di un bot.
+    }
+  }
+  return bots
 }
 
 /** Quanti comandi ha la rotazione, con questi bot: serve a spartirli tra i giri. */

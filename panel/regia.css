@@ -131,6 +131,8 @@ html.light .pfp .cart .marchio.m-grok img { filter: invert(1); }
 .fonte .segno { color: var(--verde); }
 .fonte.guasto { border: 1px solid var(--rosso); color: var(--testo); padding: 4px 9px; background: var(--guasto-f); }
 .fonte.guasto .segno { color: var(--rosso); }
+.fonte.avviso { border: 1px solid var(--ambra); color: var(--testo); padding: 4px 9px; background: var(--avviso-f); }
+.fonte.avviso .segno { color: var(--ambra); }
 /* Il file di stato è fermo: una fascia rossa in testa al pannello, in tutte le viste, che resta su mentre si scorre.
    Rosso perché è uno stato (un guasto), non un'azione. Niente animazioni: deve solo essere lì. */
 .motore-fermo { display: grid; gap: 3px; border: 1px solid var(--rosso); border-left-width: 4px; background: var(--guasto-f); color: var(--testo); padding: 8px 11px; font-size: 12px; line-height: 1.4; min-width: 0; }

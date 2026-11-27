@@ -381,6 +381,8 @@ export type CliGrezza = {
   posta: Grezzo[]
   /** `orchestration worker-list`: i worker di orchestrazione con lo stato della loro consegna. */
   operai?: Grezzo[]
+  /** `bot list` non ha risposto: i bot sono quelli di questo computer, da un comando più rapido. */
+  parziale?: { motivo: 'timeout' | 'error'; secondi: number }
 }
 
 /** Una consegna di orchestrazione, per terminale: com'è andata. */
@@ -392,6 +394,7 @@ export type ParteCli = {
   automazioni: Quadro['automazioni']
   messaggi: Messaggio[]
   operai?: Operaio[]
+  parziale?: { motivo: 'timeout' | 'error'; secondi: number }
 }
 
 /**
@@ -521,7 +524,7 @@ export function normaCli(grezza: CliGrezza, casa = ''): ParteCli {
     quando: ms(m.created_at)
   }))
 
-  return { bot, schede, automazioni, messaggi, operai: normaOperai(grezza.operai) }
+  return { bot, schede, automazioni, messaggi, operai: normaOperai(grezza.operai), ...(grezza.parziale ? { parziale: grezza.parziale } : {}) }
 }
 
 /**
@@ -1280,7 +1283,7 @@ export function componi(x: Ingressi): Quadro {
     fermo: Boolean(x.fermo),
     ...(x.sandbox ? { sandbox: { prove: x.sandbox.prove } } : {}),
     fonti: {
-      cli: { ok: Boolean(cli) && !x.cli.errore, quando: x.cli.quando, errore: x.cli.errore },
+      cli: { ok: Boolean(cli) && !x.cli.errore, quando: x.cli.quando, errore: x.cli.errore, ...(cli?.parziale && !x.cli.errore ? { parziale: cli.parziale } : {}) },
       motore: { ok: motoreVivo, aggiornato: motore?.aggiornato ?? null, errore: x.motore.errore, spento: Boolean(x.motoreSpento), ...(agenti.some((a) => a.vecchio !== undefined) ? { ultimi: true } : {}) },
       ufficioDa,
       incrociDisponibili: ufficioDa === 'motore' && motoreVivo
@@ -1316,6 +1319,10 @@ export function voceBarra(q: Quadro, nome = NOME): { text: string; tone: 'warnin
   const testo = [nome, n ? `${n} to decide` : '', oggi ? `${oggi} today` : ''].filter(Boolean).join(' · ')
   // Di chi è la coda, quando è di un bot solo.
   const di = q.coda.diTutti ? '' : corto(q.coda.bot, 24)
+  // Senza la CLI e senza il file di stato, ma con l'API dei plugin (le schede, dal pannello di Orca): una fonte è viva, e non si dice «stalled».
+  if (!q.fonti.cli.ok && !q.fonti.motore.ok && q.fonti.ufficioDa === 'api') {
+    return { text: n || oggi ? testo : nome, tone: 'warning', tooltip: 'The Orca CLI is not answering: the queue may be stale. Agent states come from the Orca window.' }
+  }
   if (!q.fonti.cli.ok && !q.fonti.motore.ok) {
     return { text: n || oggi ? testo : `${nome} · data stalled`, tone: 'danger', tooltip: q.fonti.motore.spento ? 'The Orca CLI is not answering: the data may be stale.' : 'Neither the Orca CLI nor the state file is answering: the data may be stale.' }
   }

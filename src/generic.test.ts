@@ -3,7 +3,7 @@
 // optional state file, the settings, and what the worker reads and launches.
 import { afterEach, assert, mockHost, mountWorker, test } from 'orca/testing'
 import { BOTS, HOME, demoCli, demoHomes, demoSandbox, demoState } from '../demo/demo.mjs'
-import { COMANDI, leggiMascotta, leggiSandbox, type Dipendenze } from './fonti'
+import { cliDiWindows, COMANDI, envPerLaCli, leggiCliAGiri, leggiMascotta, leggiSandbox, memoriaCli, RIPROVA_BOT_MS, type Dipendenze } from './fonti'
 import { componi, componiCoda, leggiTitolo, normaCli, normaMotore, normaSandbox, orchestratoreTra, ordinaProgetti, proveFinite, testoAvviso, voceBarra } from './norma'
 import { impostazioniDa, NEUTRE, NOME, type Opzioni } from './opzioni'
 import { avvia, deactivate } from './worker'
@@ -238,6 +238,210 @@ async function monta(f: Finte, settings: Record<string, unknown> = {}, storage: 
   attivo = worker
   return { host, worker }
 }
+
+test('the CLI is launched with an environment that has APPDATA on Windows, where the worker has none', () => {
+  // Orca starts the worker with a reduced environment: on Windows there is no APPDATA, and the CLI
+  // cannot find the runtime of Orca without it, so every command comes back `runtime_unavailable`.
+  const win = envPerLaCli({ SystemRoot: 'C:\\Windows' }, 'C:\\Users\\pippo', 'win32')
+  assert.equal(win.APPDATA, 'C:\\Users\\pippo\\AppData\\Roaming')
+  assert.equal(win.LOCALAPPDATA, 'C:\\Users\\pippo\\AppData\\Local')
+  // What the worker already has is left as it is.
+  assert.equal(win.SystemRoot, 'C:\\Windows')
+  assert.equal(envPerLaCli({ APPDATA: 'D:\\altro' }, 'C:\\Users\\pippo', 'win32').APPDATA, 'D:\\altro')
+  // Anywhere else nothing changes.
+  assert.deepEqual(envPerLaCli({ PATH: '/usr/bin' }, '/home/pippo', 'linux'), { PATH: '/usr/bin' })
+})
+
+test('on Windows the CLI is looked for by its full path, because the worker runs inside the app folder', () => {
+  // Launched by name alone, the CLI looks for its command in the folder it sits in, and the worker
+  // runs inside the app folder: from there the command is not there, and every call dies.
+  const app = 'C:\\Users\\pippo\\AppData\\Local\\Programs\\orca'
+  const cli = `${app}\\resources\\bin\\orca.exe`
+  assert.deepEqual(cliDiWindows('win32', `${app}\\resources`, `${app}\\Orca.exe`, 'C:\\Users\\pippo'), [cli])
+  // Without `resourcesPath` the folder comes from the executable that is running.
+  assert.deepEqual(cliDiWindows('win32', '', `${app}\\Orca.exe`, 'C:\\Users\\pippo'), [cli])
+  // With neither, the default install folder is tried.
+  assert.deepEqual(cliDiWindows('win32', '', '', 'C:\\Users\\pippo'), [cli])
+  // Anywhere else nothing is added: the CLI is where `ORCA_APP` says.
+  assert.deepEqual(cliDiWindows('linux', '/opt/orca/resources', '/opt/orca/orca', '/home/pippo'), [])
+})
+
+/**
+ * `bot list` as a hung paired server makes it: the CLI is killed by the deadline. Every command that also asks the paired
+ * servers hangs the same way, `worktree ps --since …` (which carries `otherBots`) included: it is killed too. The bots of this
+ * computer are then only in their homes (`~/.orca/bots/<home>/bot.json`), which the demo dip serves.
+ */
+function conListaCheNonRisponde(opzioni: { killed?: boolean } = { killed: true }) {
+  const f = finte()
+  const demo = f.dip.lancia
+  const log: { eseguibile: string; comando: string; scadenza?: number }[] = []
+  const stato = { lenta: true }
+  f.dip.lancia = async (eseguibile, argomenti, scadenzaMs) => {
+    const comando = argomenti.filter((a) => a !== '--json').join(' ')
+    log.push({ eseguibile, comando, scadenza: scadenzaMs })
+    if (comando === 'bot list' && stato.lenta) throw Object.assign(new Error('Command failed'), opzioni.killed ? { killed: true, signal: 'SIGTERM' } : { code: 'ENOENT' })
+    if (comando.startsWith('worktree ps') && comando.includes('--since')) throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' })
+    return demo(eseguibile, argomenti, scadenzaMs)
+  }
+  return { f, log, stato }
+}
+const botsLocali = () => (demoCli(NOW) as any)['bot list'].bots as any[]
+
+test('a `bot list` that hangs does not take the panel down: this computer\'s bots show, the notice says why, the full list is retried a minute later', async () => {
+  const { f, log, stato } = conListaCheNonRisponde()
+  const mem = memoriaCli()
+  let ora = NOW
+  f.dip.adesso = () => ora
+  // The first round: `bot list` is tried once, with its deadline, and killed.
+  const uno = await leggiCliAGiri(f.dip, '', mem, { tutto: true, scadenzaBotMs: 3000 })
+  assert.deepEqual(uno.bots.map((b: any) => b.id).sort(), botsLocali().map((b) => b.id).sort())
+  assert.deepEqual(uno.parziale, { motivo: 'timeout', secondi: 3 })
+  assert.deepEqual(log.filter((l) => l.comando === 'bot list').map((l) => l.scadenza), [3000])
+  // The bots' own items, work and chats still come: the rest of the round ran.
+  assert.ok(log.some((l) => l.comando.startsWith('bot item list --bot ')))
+  // The bots come from a command that answers, and the plugin keeps using the CLI that answered.
+  assert.ok(mem.buono)
+  // The next rounds (every 4 s) do not pay the deadline again.
+  const antes = log.filter((l) => l.comando === 'bot list').length
+  ora += 4000
+  const due = await leggiCliAGiri(f.dip, '', mem, { quanti: 1 })
+  assert.equal(log.filter((l) => l.comando === 'bot list').length, antes)
+  assert.deepEqual(due.parziale, { motivo: 'timeout', secondi: 3 })
+  // A minute later the full list is asked for again IN THE BACKGROUND: the round does not wait for it (it would cost the deadline).
+  ora += RIPROVA_BOT_MS
+  stato.lenta = false
+  const tre = await leggiCliAGiri(f.dip, '', mem, { quanti: 1 })
+  assert.equal(log.filter((l) => l.comando === 'bot list').length, antes + 1)
+  assert.deepEqual(tre.parziale, { motivo: 'timeout', secondi: 3 })
+  // It answered: the next round has the full list and no notice.
+  await mem.sonda
+  ora += 4000
+  const quattro = await leggiCliAGiri(f.dip, '', mem, { quanti: 1 })
+  assert.equal(quattro.parziale, undefined)
+  assert.equal(mem.lista, null)
+  assert.equal(log.filter((l) => l.comando === 'bot list').length, antes + 1)
+  // A background try that is killed again keeps the notice and waits another minute.
+  stato.lenta = true
+  const otra = conListaCheNonRisponde()
+  const m2 = memoriaCli()
+  let ora2 = NOW
+  otra.f.dip.adesso = () => ora2
+  await leggiCliAGiri(otra.f.dip, '', m2, { tutto: true })
+  ora2 += RIPROVA_BOT_MS
+  await leggiCliAGiri(otra.f.dip, '', m2, { quanti: 1 })
+  await m2.sonda
+  assert.equal(m2.piena, null)
+  assert.equal(m2.lista?.quando, ora2)
+})
+
+test('the retry of a hung bot list never holds a round: the round returns while the retry is still pending', async () => {
+  const { f } = conListaCheNonRisponde()
+  const mem = memoriaCli()
+  let ora = NOW
+  f.dip.adesso = () => ora
+  await leggiCliAGiri(f.dip, '', mem, { tutto: true })
+  const real = f.dip.lancia
+  // From now on bot list hangs for good (never answers); the rest answers.
+  f.dip.lancia = (e, a, s) => (a.includes('list') && a[0] === 'bot' && a.length <= 3 ? new Promise<string>(() => {}) : real(e, a, s))
+  ora += RIPROVA_BOT_MS
+  const ronda = await Promise.race([leggiCliAGiri(f.dip, '', mem, { quanti: 1 }), new Promise<string>((r) => setTimeout(() => r('held'), 1500))])
+  assert.notEqual(ronda, 'held')
+  assert.ok(mem.sonda, 'the retry is running in the background')
+})
+
+test('a per-bot command that hangs on a paired server costs one deadline, not one per bot: the others are skipped for a minute and the last data stays', async () => {
+  // `bot work list --bot <id>` also asks the paired servers: with one down it is killed every time (12 s each, 13 bots: minutes per round).
+  const f = finte()
+  const demo = f.dip.lancia
+  const log: string[] = []
+  f.dip.lancia = async (e, a, s) => {
+    const c = a.filter((x) => x !== '--json').join(' ')
+    log.push(c)
+    if (c.startsWith('bot work list --bot ')) throw Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' })
+    return demo(e, a, s)
+  }
+  const mem = memoriaCli()
+  let ora = NOW
+  f.dip.adesso = () => ora
+  const g = await leggiCliAGiri(f.dip, '', mem, { tutto: true })
+  assert.equal(log.filter((c) => c.startsWith('bot work list --bot ')).length, 1, 'one kill, the other bots are skipped')
+  // The rest of the picture is all there: items and chats of every bot.
+  assert.ok(log.filter((c) => c.startsWith('bot item list --bot ')).length > 1)
+  assert.ok(g.bots.length > 1)
+  // The next rounds do not ask again for a minute...
+  ora += 4000
+  await leggiCliAGiri(f.dip, '', mem, { tutto: true })
+  assert.equal(log.filter((c) => c.startsWith('bot work list --bot ')).length, 1)
+  // ...and then they try once more.
+  ora += RIPROVA_BOT_MS
+  await leggiCliAGiri(f.dip, '', mem, { tutto: true })
+  assert.equal(log.filter((c) => c.startsWith('bot work list --bot ')).length, 2)
+})
+
+test('a `bot list` killed by its deadline is not tried again with the next executable', async () => {
+  const { f, log } = conListaCheNonRisponde()
+  await leggiCliAGiri(f.dip, '/custom/orca', memoriaCli(), { tutto: true })
+  // One executable answered the deadline: the others would only wait the same time again.
+  assert.equal(new Set(log.filter((l) => l.comando === 'bot list').map((l) => l.eseguibile)).size, 1)
+  assert.equal(log.find((l) => l.comando === 'bot list')?.eseguibile, '/custom/orca')
+  // The rest of the round goes to that same executable.
+  assert.equal(log.find((l) => l.comando === 'worktree ps --limit 300')?.eseguibile, '/custom/orca')
+  // And nothing asks the paired servers again: no `--since`.
+  assert.equal(log.some((l) => l.comando.includes('--since')), false)
+  // An executable that is not there (not a deadline) does let the next one try.
+  const falta = conListaCheNonRisponde({ killed: false })
+  await leggiCliAGiri(falta.f.dip, '/custom/orca', memoriaCli(), { tutto: true })
+  assert.ok(new Set(falta.log.filter((l) => l.comando === 'bot list').map((l) => l.eseguibile)).size > 1)
+})
+
+test('with no bot homes either, the failure is the failure of `bot list`, as before; and `bot list` is not retried inside every round', async () => {
+  const { f, log } = conListaCheNonRisponde()
+  f.dip.elenca = async () => {
+    throw new Error('ENOENT')
+  }
+  const mem = memoriaCli()
+  await assert.rejects(() => leggiCliAGiri(f.dip, '', mem, { tutto: true }))
+  const una = log.filter((l) => l.comando === 'bot list').length
+  // The next round (4 s later) does not wait the deadline again.
+  await assert.rejects(() => leggiCliAGiri(f.dip, '', mem, { tutto: true }))
+  assert.equal(log.filter((l) => l.comando === 'bot list').length, una)
+  assert.equal(log.some((l) => l.comando.includes('--since')), false)
+})
+
+test('the bots of this computer come from their homes, whatever the paired servers do: ids, names and agents', async () => {
+  const { f } = conListaCheNonRisponde()
+  const g = await leggiCliAGiri(f.dip, '', memoriaCli(), { tutto: true })
+  assert.deepEqual(g.bots.map((b: any) => b.id).sort(), botsLocali().map((b) => b.id).sort())
+  assert.ok(g.bots.every((b: any) => b.name && b.agent === 'claude' && b.paused === false))
+  assert.deepEqual(g.parziale, { motivo: 'timeout', secondi: 10 })
+})
+
+test('worker: a hung `bot list` shows the local bots and an amber notice, not the red banner or "data stalled"', async () => {
+  const { f } = conListaCheNonRisponde()
+  const { worker } = await monta(f)
+  const q = await worker.request('regia.aggiorna')
+  assert.equal(q.fonti.cli.ok, true)
+  assert.equal(q.fonti.cli.parziale?.motivo, 'timeout')
+  assert.ok(q.bot.length > 0)
+  const V = await import('../panel/viste.js')
+  const html = V.fonti(q, NOW)
+  assert.ok(html.includes('class="fonte avviso"'), html)
+  assert.ok(html.includes('only this computer'), html)
+  assert.ok(!html.includes('guasto') && !html.includes('not answering'), html)
+  assert.ok(!voceBarra(q).text.includes('stalled'))
+})
+
+test('"data stalled" only when no source is alive: the plugin API alone keeps the status bar from saying it', () => {
+  const sinCli = (workspaces: any[] | null) => componi({ adesso: NOW, cli: { parte: null, quando: null, errore: 'no CLI' }, motore: { parte: null, errore: null }, motoreSpento: true, api: { workspaces }, botInArrivo: [], casa: HOME, opzioni: NEUTRE })
+  // Nothing alive: stalled, in red.
+  const muerto = voceBarra(sinCli(null))
+  assert.deepEqual([muerto.text, muerto.tone], [`${NOME} · data stalled`, 'danger'])
+  // The CLI is down but Orca's own window answers: a warning that says what is stale, not "stalled".
+  const vivo = voceBarra(sinCli([{ id: 'w1', path: HOME + '/code/x', displayName: 'x', status: 'working' }]))
+  assert.equal(vivo.tone, 'warning')
+  assert.ok(!vivo.text.includes('stalled'), vivo.text)
+  assert.ok(vivo.tooltip.includes('Orca window'), vivo.tooltip)
+})
 
 test('worker, nothing configured: a full picture, no state file looked for, read-only commands only', async () => {
   const f = finte()
