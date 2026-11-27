@@ -17,9 +17,6 @@ import { avatarDi, botUnici, oggettoScelta, type CliGrezza, type FotoBot, type F
 /** Gli unici comandi che il plugin lancia. `{bot}` è l'id di un bot preso da `bot list`: il nome può cambiare e portare un'emoji, l'id no. */
 export const COMANDI = {
   bot: ['bot', 'list'],
-  // Ripiego di `bot list`, solo i bot di questo computer: `bot list` chiede anche a ogni server collegato e, se uno non risponde, non risponde nemmeno lui.
-  // `otherBots` c'è solo con `--since`; `--limit 1` tiene corta la parte delle schede, che qui non serve.
-  roster: ['worktree', 'ps', '--since', '7d', '--limit', '1'],
   item: ['bot', 'item', 'list', '--bot', '{bot}'],
   lavori: ['bot', 'work', 'list', '--bot', '{bot}'],
   chat: ['bot', 'chats', '--bot', '{bot}'],
@@ -372,22 +369,31 @@ export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: 
     if (errore) parziale = { motivo: fermato ? 'timeout' : 'error', secondi: Math.round(scadenza / 1000) }
   }
   if (errore && parziale) {
-    // `bot list` non c'è: i bot di questo computer da un comando che risponde (vedi COMANDI.roster).
-    for (const e of fermato ? [fermato] : eseguibili) {
-      try {
-        const lista = (await comando(dip, [e], 'roster'))?.otherBots
-        if (!Array.isArray(lista)) throw new Error('no bot roster in the answer')
-        bots = botUnici(lista)
-        buono = e
-        errore = null
-        break
-      } catch {
-        // Si prova l'eseguibile dopo; se nessuno risponde vale l'errore di `bot list`.
+    // `bot list` non c'è: i bot di questo computer dalle loro case, senza la CLI. Ogni comando che chiede anche ai
+    // server collegati (`bot list`, `worktree ps --since`) si ferma dove si ferma lui: nessuno è un ripiego.
+    try {
+      bots = botUnici(await leggiRoster(dip))
+      if (!bots.length) throw new Error('no bot homes')
+      // Un eseguibile per il resto del giro: quello fermato dalla scadenza c'è; sennò il primo che risponde alle schede (locali).
+      buono = fermato
+      for (const e of fermato ? [] : eseguibili) {
+        try {
+          await comando(dip, [e], 'schede')
+          buono = e
+          break
+        } catch {
+          // Non c'è: il prossimo.
+        }
       }
+      if (buono) errore = null
+    } catch {
+      // Nessuna casa: vale l'errore di `bot list`.
     }
   }
   if (errore) {
     mem.buono = null
+    // Anche senza ripiego non si aspetta `bot list` a ogni giro.
+    if (parziale && !mem.lista) mem.lista = { quando: adesso, parziale }
     throw errore
   }
   mem.buono = buono
@@ -456,6 +462,24 @@ export async function leggiCliAGiri(dip: Dipendenze, percorsoOrca: string, mem: 
   await operai()
   mem.grezza = grezza
   return grezza
+}
+
+/**
+ * I bot di questo computer dalle loro case, `~/.orca/bots/<casa>/bot.json`: id, nome e agente, come li chiede `bot list`
+ * ma senza `paused` e senza la specialità (non stanno nel file). Solo case con un id valido: una chat di gruppo non è un bot.
+ */
+export async function leggiRoster(dip: Dipendenze, cartella = CASE_BOT): Promise<any[]> {
+  const radice = espandi(cartella, dip.casa)
+  const bots: any[] = []
+  for (const casa of (await dip.elenca(radice)).filter((n) => NOME_CASA.test(n)).sort().slice(0, 60)) {
+    try {
+      const b = JSON.parse(await dip.leggiFile(`${radice}/${casa}/bot.json`))
+      if (b && typeof b.name === 'string' && ID_BOT.test(String(b.id))) bots.push({ id: String(b.id), name: b.name, agent: typeof b.agent === 'string' ? b.agent : '', paused: false, specialty: '' })
+    } catch {
+      // Non è la casa di un bot.
+    }
+  }
+  return bots
 }
 
 /** Quanti comandi ha la rotazione, con questi bot: serve a spartirli tra i giri. */
